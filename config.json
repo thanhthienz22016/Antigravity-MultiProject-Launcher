@@ -25,10 +25,17 @@
             "id": "proj_timioffice",
             "name": "Timioffice",
             "path": "Z:\\home\\thanhthien\\projects\\timioffice"
+        },
+        {
+            "id": "proj_1790097803",
+            "name": "Projects common",
+            "path": "Z:/home/thanhthien/projects"
         }
     ],
-    "mappings": {},
+    "mappings": {
+        "profile_2": "proj_1790097803"
+    },
     "autostart": false,
     "last_profile_id": "profile_2",
-    "last_project_id": "proj_timioffice"
+    "last_project_id": "proj_1790097803"
 }

@@ -1,10 +1,18 @@
 # -*- coding: utf-8 -*-
-"""
+r"""
 Antigravity Swarm Manager (Multi-Account x Multi-Project Launcher)
 ==================================================================
-Phiên bản: 2.1 (Nâng Cấp Pro: System Tray & Windows Autostart)
+Phiên bản: 2.2 (Nâng Cấp Pro: Auto-Sync Antigravity Projects & Quick Folder Picker)
 
 Tính năng chính:
+- [P0 - Tự Động Auto-Sync Projects từ Database Antigravity]:
+  - Đọc trực tiếp file SQLite conversation_summaries.db của Antigravity.
+  - Quét workspace_uris và title, giải mã URI file:///... thành Windows path chuẩn (Z:\..., C:\...).
+  - Thống kê số lượng cuộc hội thoại (convs) và tên tác vụ gần nhất cho từng dự án.
+  - Nút "🔄 Đồng Bộ Lại Từ Antigravity" làm mới danh sách tức thời.
+- [P0 - Tiện Ích Chọn Thư Mục Khác (Quick Folder Picker)]:
+  - Nút "📁 Chọn Thư Mục Khác..." mở Windows Folder Picker chọn bất kỳ thư mục nào (Windows / WSL2 Z:).
+  - Tự động ghi nhận vào danh sách dự án và sẵn sàng mở ngay với Antigravity.
 - [P0 - Win32 Title Hook]: Tự động đổi tiêu đề cửa sổ Antigravity & Taskbar Windows:
   "[Gmail: <Tên/Email>] - <Tên Dự Án> - Antigravity" giúp phân biệt tức thì các cửa sổ.
 - [P0 - Khay Hệ Thống (System Tray)]: 
@@ -34,6 +42,9 @@ import subprocess
 import glob
 from pathlib import Path
 import shutil
+import sqlite3
+import urllib.parse
+import hashlib
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import winreg
@@ -771,6 +782,276 @@ def save_config(cfg):
 
 
 # ---------------------------------------------------------------------------
+# Antigravity Database Integration & Auto-Sync (conversation_summaries.db)
+# ---------------------------------------------------------------------------
+def get_antigravity_db_path():
+    """Tự động phát hiện vị trí file SQLite conversation_summaries.db của Antigravity."""
+    home = os.environ.get("USERPROFILE", os.path.expanduser("~"))
+    candidates = [
+        os.path.join(home, ".gemini", "antigravity", "conversation_summaries.db"),
+        r"C:\Users\maing\.gemini\antigravity\conversation_summaries.db",
+        os.path.join(home, ".antigravity", "conversation_summaries.db"),
+        os.path.join(os.environ.get("APPDATA", ""), "Antigravity", "conversation_summaries.db"),
+        os.path.join(os.environ.get("APPDATA", ""), "..", ".gemini", "antigravity", "conversation_summaries.db"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "..", ".gemini", "antigravity", "conversation_summaries.db")
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return os.path.abspath(c)
+
+    # Thử quét tìm kiếm nhanh trong thư mục .gemini
+    gemini_dir = os.path.join(home, ".gemini")
+    if os.path.isdir(gemini_dir):
+        try:
+            found = glob.glob(os.path.join(gemini_dir, "**", "conversation_summaries.db"), recursive=True)
+            if found and os.path.isfile(found[0]):
+                return os.path.abspath(found[0])
+        except Exception:
+            pass
+
+    return os.path.join(home, ".gemini", "antigravity", "conversation_summaries.db")
+
+def uri_to_windows_path(uri_str):
+    r"""
+    Chuyển đổi URI file:///... hoặc WSL path thành đường dẫn Windows chuẩn.
+    Ví dụ:
+      file:///z:/home/thanhthien/projects/timioffice -> Z:\home\thanhthien\projects\timioffice
+      file:///z%3A/home/thanhthien/projects/timioffice -> Z:\home\thanhthien\projects\timioffice
+      file:///home/thanhthien/projects/timioffice   -> Z:\home\thanhthien\projects\timioffice
+      file:///c:/laragon/www/gecafe                 -> C:\laragon\www\gecafe
+      file:///c%3A/Docker                           -> C:\Docker
+      file:///c:/laragon/www/baogiaTimioffice       -> C:\laragon\www\baogiaTimioffice
+      file://wsl$/Ubuntu/home/thanhthien            -> \\wsl$\Ubuntu\home\thanhthien
+    """
+    if not uri_str:
+        return ""
+    uri_str = str(uri_str).strip().strip("'\"")
+    decoded = urllib.parse.unquote(uri_str)
+
+    # 1. Xử lý VS Code remote URI (ví dụ: vscode-remote://wsl%2Bubuntu/home/...)
+    if "vscode-remote://" in decoded or "vscode-vfs://" in decoded:
+        m = re.search(r'/(home/[^\s?#]+)', decoded)
+        if m:
+            decoded = "z:/" + m.group(1)
+        else:
+            decoded = re.sub(r'^[a-z\-]+://[^/]+/', '/', decoded)
+
+    # 2. Xử lý UNC path (wsl$ hoặc mạng nội bộ)
+    is_unc = False
+    if decoded.startswith("file:////") or decoded.startswith("file://wsl$") or decoded.startswith("file://wsl.localhost"):
+        is_unc = True
+        decoded = decoded[7:] # bỏ tiền tố "file://"
+    elif decoded.startswith("file:///"):
+        decoded = decoded[8:]
+    elif decoded.startswith("file://"):
+        decoded = decoded[7:]
+    elif decoded.startswith("file:"):
+        decoded = decoded[5:]
+
+    if is_unc or decoded.startswith("wsl$") or decoded.startswith("wsl.localhost") or decoded.startswith("//") or decoded.startswith("\\\\"):
+        decoded = decoded.replace("/", "\\")
+        if not decoded.startswith("\\\\"):
+            decoded = "\\\\" + decoded.lstrip("\\")
+        return os.path.normpath(decoded)
+
+    # Xử lý URI có authority localhost/ (ví dụ file://localhost/C:/...)
+    if decoded.lower().startswith("localhost/") or decoded.lower().startswith("localhost\\"):
+        decoded = decoded[10:]
+
+    # 3. Chuẩn hóa nếu có dấu gạch chéo đứng trước ổ đĩa (ví dụ /z:/ hoặc /c:/)
+    while decoded.startswith("/") and len(decoded) >= 3 and decoded[2] == ":":
+        decoded = decoded[1:]
+
+    # 4. Nhận diện đường dẫn WSL Linux (/home/... hoặc home/...) -> map sang ổ Z: trên Windows
+    if decoded.startswith("/home/") or decoded.startswith("\\home\\") or decoded == "/home" or decoded == "\\home":
+        decoded = "z:" + ("/" + decoded.lstrip("/\\"))
+    elif decoded.startswith("home/") or decoded.startswith("home\\"):
+        decoded = "z:/" + decoded
+
+    # 5. Viết hoa ký tự ổ đĩa (z: -> Z:, c: -> C:)
+    if len(decoded) >= 2 and decoded[1] == ":" and decoded[0].isalpha():
+        decoded = decoded[0].upper() + decoded[1:]
+
+    path = decoded.replace("/", "\\")
+    return os.path.normpath(path)
+
+def parse_workspace_uris(raw_val):
+    """
+    Trích xuất danh sách URI từ trường workspace_uris.
+    Hỗ trợ mọi định dạng: JSON array of objects/strings, Dict, Single String, CSV, Multi-line.
+    """
+    if not raw_val:
+        return []
+
+    results = []
+
+    def _extract(val):
+        if not val:
+            return
+        if isinstance(val, list):
+            for item in val:
+                _extract(item)
+        elif isinstance(val, dict):
+            # Nhận diện các thuộc tính tiêu chuẩn trong vscode.Uri serialization
+            for key in ["_formatted", "fsPath", "path", "uri", "external", "raw"]:
+                if key in val and val[key]:
+                    _extract(val[key])
+                    return
+            for v in val.values():
+                if isinstance(v, (str, dict, list)):
+                    _extract(v)
+        elif isinstance(val, str):
+            s = val.strip().strip("'\"")
+            if not s:
+                return
+            # Thử giải mã nếu là chuỗi JSON hợp lệ
+            if (s.startswith("[") and s.endswith("]")) or (s.startswith("{") and s.endswith("}")):
+                try:
+                    loaded = json.loads(s)
+                    _extract(loaded)
+                    return
+                except Exception:
+                    pass
+            # Tìm kiếm các URI bằng regex
+            uris = re.findall(r'(?:file|vscode-remote|vscode-vfs):///[^\s",\'\]\}]+', s)
+            if uris:
+                results.extend(uris)
+                return
+            # Tách dòng nếu có nhiều dòng
+            if "\n" in s:
+                for line in s.splitlines():
+                    _extract(line)
+                return
+            # Phân tách theo dấu phẩy nếu chứa chuỗi URI
+            if "," in s and ("file:" in s or "/" in s or "\\" in s):
+                for part in s.split(","):
+                    _extract(part)
+                return
+            results.append(s)
+
+    _extract(raw_val)
+
+    # Khử trùng lặp và giữ nguyên thứ tự xuất hiện
+    clean_list = []
+    seen = set()
+    for item in results:
+        item_str = str(item).strip().strip("'\"")
+        if item_str and item_str not in seen:
+            seen.add(item_str)
+            clean_list.append(item_str)
+    return clean_list
+
+def sync_projects_from_db():
+    """
+    Đọc trực tiếp file SQLite conversation_summaries.db của Antigravity.
+    Quét bảng conversation_summaries lấy workspace_uris và title thực tế.
+    Trả về danh sách dự án với số lượng hội thoại và tên hội thoại gần nhất.
+    """
+    db_path = get_antigravity_db_path()
+    if not db_path or not os.path.isfile(db_path):
+        return []
+
+    conn = None
+    try:
+        # Chuẩn hóa URI mở read-only an toàn tuyệt đối trên Windows (RFC compliant)
+        try:
+            db_uri = Path(os.path.abspath(db_path)).as_uri() + "?mode=ro"
+            conn = sqlite3.connect(db_uri, uri=True, timeout=3.0)
+        except Exception:
+            try:
+                db_abs = os.path.abspath(db_path).replace("\\", "/")
+                uri_conn = f"file:///{urllib.parse.quote(db_abs, safe='/:')}?mode=ro"
+                conn = sqlite3.connect(uri_conn, uri=True, timeout=3.0)
+            except Exception:
+                conn = sqlite3.connect(db_path, timeout=3.0)
+
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='conversation_summaries'")
+        if not cursor.fetchone():
+            return []
+
+        cursor.execute("PRAGMA table_info(conversation_summaries)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        uri_col = None
+        for c in ["workspace_uris", "workspace_uri", "workspaces", "workspace"]:
+            if c in columns:
+                uri_col = c
+                break
+        if not uri_col:
+            return []
+
+        title_col = "title" if "title" in columns else None
+
+        time_col = None
+        for c in ["updated_at", "last_updated_at", "last_modified", "timestamp", "created_at"]:
+            if c in columns:
+                time_col = c
+                break
+        if not time_col:
+            time_col = "rowid"
+
+        query = f"SELECT {uri_col}"
+        if title_col:
+            query += f", {title_col}"
+        else:
+            query += ", ''"
+        query += f", {time_col} FROM conversation_summaries WHERE {uri_col} IS NOT NULL AND {uri_col} != '' ORDER BY {time_col} DESC"
+
+        cursor.execute(query)
+        rows = cursor.fetchall()
+
+        project_map = {}
+        for raw_uris, conv_title, _ts in rows:
+            extracted_uris = parse_workspace_uris(raw_uris)
+            clean_title = " ".join((conv_title or "").split()).strip()
+
+            for u in extracted_uris:
+                w_path = uri_to_windows_path(u)
+                if not w_path or len(w_path) < 3:
+                    continue
+                # Nếu đường dẫn trỏ tới 1 file lẻ thì lấy thư mục cha
+                if os.path.isfile(w_path):
+                    w_path = os.path.dirname(w_path)
+
+                w_path = os.path.normpath(w_path)
+                norm_key = os.path.normcase(w_path)
+
+                if norm_key not in project_map:
+                    base_name = os.path.basename(w_path)
+                    if not base_name:
+                        base_name = w_path
+                    display_name = base_name.capitalize() if base_name.islower() else base_name
+                    project_map[norm_key] = {
+                        "path": w_path,
+                        "name": display_name,
+                        "conv_count": 1,
+                        "latest_title": clean_title,
+                        "titles": [clean_title] if clean_title else []
+                    }
+                else:
+                    project_map[norm_key]["conv_count"] += 1
+                    if not project_map[norm_key]["latest_title"] and clean_title:
+                        project_map[norm_key]["latest_title"] = clean_title
+                    if clean_title and clean_title not in project_map[norm_key]["titles"]:
+                        if len(project_map[norm_key]["titles"]) < 10:
+                            project_map[norm_key]["titles"].append(clean_title)
+
+        # Sắp xếp dự án theo số lượng cuộc hội thoại giảm dần
+        sorted_projects = sorted(project_map.values(), key=lambda x: x["conv_count"], reverse=True)
+        return sorted_projects
+    except Exception as e:
+        print(f"Lỗi khi đọc SQLite Antigravity DB: {e}")
+        return []
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
 # Background Window Title Hook
 # ---------------------------------------------------------------------------
 class WindowTitleHook(threading.Thread):
@@ -864,6 +1145,12 @@ class SwarmManagerApp(tk.Tk):
 
         self.config_data = load_config()
         self.running_instances = [] # list of dicts: pid, proc, profile, project, start_time, hwnd, hook_thread
+
+        # Tự động nạp và cập nhật các dự án từ database Antigravity khi khởi động
+        try:
+            self._sync_projects_from_db(silent=True)
+        except Exception as e:
+            print(f"Lỗi tự động sync DB khi khởi động: {e}")
 
         self._build_ui()
         self._setup_system_tray()
@@ -1071,17 +1358,37 @@ class SwarmManagerApp(tk.Tk):
         q_grid.pack(fill=tk.X)
 
         ttk.Label(q_grid, text="Chọn Profile:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-        self.quick_profile_cb = ttk.Combobox(q_grid, state="readonly", width=35)
+        self.quick_profile_cb = ttk.Combobox(q_grid, state="readonly", width=30)
         self.quick_profile_cb.grid(row=0, column=1, padx=5, pady=5)
         self.quick_profile_cb.bind("<<ComboboxSelected>>", lambda e: self._save_current_state())
 
-        ttk.Label(q_grid, text="Chọn Dự Án:").grid(row=0, column=2, sticky=tk.W, padx=15, pady=5)
-        self.quick_project_cb = ttk.Combobox(q_grid, state="readonly", width=35)
-        self.quick_project_cb.grid(row=0, column=3, padx=5, pady=5)
+        ttk.Label(q_grid, text="Chọn Dự Án:").grid(row=0, column=2, sticky=tk.W, padx=10, pady=5)
+        self.quick_project_cb = ttk.Combobox(q_grid, state="readonly", width=38)
+        self.quick_project_cb.grid(row=0, column=3, sticky=tk.EW, padx=5, pady=5)
         self.quick_project_cb.bind("<<ComboboxSelected>>", lambda e: self._save_current_state())
+        q_grid.columnconfigure(3, weight=1)
 
-        btn_launch_single = ttk.Button(q_grid, text="▶ Mở Cửa Sổ Này", command=self._launch_single_selected)
-        btn_launch_single.grid(row=0, column=4, padx=15, pady=5)
+        btn_pick_folder = ttk.Button(
+            q_grid,
+            text="📁 Chọn Thư Mục Mới...",
+            command=self._pick_and_open_new_folder
+        )
+        btn_pick_folder.grid(row=0, column=4, padx=5, pady=5)
+
+        btn_sync = ttk.Button(
+            q_grid,
+            text="🔄 Đồng Bộ từ Antigravity",
+            command=lambda: self._sync_projects_from_db(silent=False)
+        )
+        btn_sync.grid(row=0, column=5, padx=5, pady=5)
+
+        btn_launch_single = ttk.Button(
+            q_grid,
+            text="▶ Mở Cửa Sổ Này",
+            style="Success.TButton",
+            command=self._launch_single_selected
+        )
+        btn_launch_single.grid(row=0, column=6, padx=(10, 5), pady=5)
 
         # Matrix Mapping Table: Cho phép gán từng Profile -> Dự Án cụ thể
         matrix_frame = ttk.LabelFrame(self.tab_launch, text="Bảng Phân Bổ Swarm Matrix (Multi-Launch)", padding=10)
@@ -1116,6 +1423,11 @@ class SwarmManagerApp(tk.Tk):
 
         ttk.Button(btn_frame, text="✔ Chọn Tất Cả", command=self._matrix_select_all).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="✖ Bỏ Chọn", command=self._matrix_deselect_all).pack(side=tk.LEFT, padx=5)
+        ttk.Button(
+            btn_frame,
+            text="🔄 Đồng Bộ từ Antigravity",
+            command=lambda: self._sync_projects_from_db(silent=False)
+        ).pack(side=tk.LEFT, padx=10)
 
         btn_launch_matrix = ttk.Button(
             btn_frame,
@@ -1164,16 +1476,25 @@ class SwarmManagerApp(tk.Tk):
         ttk.Button(top_bar, text="➕ Thêm Dự Án Mới", command=self._open_add_project_dialog).pack(side=tk.LEFT, padx=5)
         ttk.Button(top_bar, text="✏ Sửa Dự Án", command=self._open_edit_project_dialog).pack(side=tk.LEFT, padx=5)
         ttk.Button(top_bar, text="🗑 Xóa Dự Án", command=self._delete_project).pack(side=tk.LEFT, padx=5)
+        ttk.Button(
+            top_bar,
+            text="🔄 Đồng Bộ Từ Antigravity",
+            command=lambda: self._sync_projects_from_db(silent=False)
+        ).pack(side=tk.LEFT, padx=15)
 
-        cols = ("id", "name", "path")
+        cols = ("id", "name", "path", "conv_count", "latest_title")
         self.projects_tree = ttk.Treeview(self.tab_projects, columns=cols, show="headings")
         self.projects_tree.heading("id", text="Mã Dự Án")
         self.projects_tree.heading("name", text="Tên Dự Án")
-        self.projects_tree.heading("path", text="Đường Dẫn Dự Án (Workspace Directory)")
+        self.projects_tree.heading("path", text="Đường Dẫn Thư Mục (Workspace)")
+        self.projects_tree.heading("conv_count", text="Số Hội Thoại")
+        self.projects_tree.heading("latest_title", text="Hội Thoại Gần Nhất")
 
-        self.projects_tree.column("id", width=120)
-        self.projects_tree.column("name", width=220)
-        self.projects_tree.column("path", width=500)
+        self.projects_tree.column("id", width=110)
+        self.projects_tree.column("name", width=150)
+        self.projects_tree.column("path", width=340)
+        self.projects_tree.column("conv_count", width=95, anchor=tk.CENTER)
+        self.projects_tree.column("latest_title", width=220)
 
         self.projects_tree.pack(fill=tk.BOTH, expand=True)
         self._refresh_projects_table()
@@ -1224,12 +1545,161 @@ class SwarmManagerApp(tk.Tk):
             self.config_data["antigravity_path"] = path
             save_config(self.config_data)
 
+    def _format_project_label(self, pr):
+        """Format tên dự án hiển thị đẹp kèm số cuộc hội thoại và tiêu đề gần nhất."""
+        if not pr:
+            return "Chưa chọn dự án"
+        name = pr.get("name", "Unnamed")
+        cnt = pr.get("conv_count", 0)
+        latest_title = " ".join((pr.get("latest_title") or "").split()).strip()
+
+        if cnt and cnt > 0:
+            if latest_title:
+                clean_t = latest_title
+                if len(clean_t) > 35:
+                    clean_t = clean_t[:32] + "..."
+                return f"{name} ({cnt} convs - {clean_t})"
+            return f"{name} ({cnt} convs)"
+        return name
+
+    def _sync_projects_from_db(self, silent=False):
+        """
+        Quét và tự động nạp các dự án thực tế từ database Antigravity (conversation_summaries.db).
+        Bảo toàn các dự án người dùng đã cấu hình trước đó.
+        """
+        db_path = get_antigravity_db_path()
+        if not db_path:
+            if not silent:
+                messagebox.showwarning(
+                    "Không tìm thấy Database",
+                    "Không tìm thấy file SQLite conversation_summaries.db của Antigravity tại:\n"
+                    r"C:\Users\maing\.gemini\antigravity\conversation_summaries.db"
+                )
+            return
+
+        db_projects = sync_projects_from_db()
+        if not db_projects and not silent:
+            messagebox.showinfo("Thông báo", "Không tìm thấy dữ liệu cuộc hội thoại nào trong Antigravity Database.")
+            return
+
+        existing_projects = self.config_data.get("projects", [])
+        existing_map = {}
+        for pr in existing_projects:
+            norm = os.path.normcase(os.path.normpath(pr.get("path", "")))
+            if norm:
+                existing_map[norm] = pr
+
+        new_count = 0
+        updated_count = 0
+
+        for db_p in db_projects:
+            norm = os.path.normcase(os.path.normpath(db_p["path"]))
+            if norm in existing_map:
+                existing_map[norm]["conv_count"] = db_p["conv_count"]
+                existing_map[norm]["latest_title"] = db_p["latest_title"]
+                existing_map[norm]["path"] = db_p["path"]
+                updated_count += 1
+            else:
+                new_id = f"proj_auto_{hashlib.md5(norm.encode('utf-8')).hexdigest()[:8]}"
+                new_item = {
+                    "id": new_id,
+                    "name": db_p["name"],
+                    "path": db_p["path"],
+                    "conv_count": db_p["conv_count"],
+                    "latest_title": db_p["latest_title"]
+                }
+                existing_projects.append(new_item)
+                existing_map[norm] = new_item
+                new_count += 1
+
+        # Sắp xếp các dự án theo số lượng cuộc hội thoại giảm dần để ưu tiên dự án đang hoạt động
+        existing_projects.sort(key=lambda x: x.get("conv_count", 0), reverse=True)
+        self.config_data["projects"] = existing_projects
+        save_config(self.config_data)
+
+        if hasattr(self, "quick_project_cb"):
+            self._refresh_comboboxes()
+        if hasattr(self, "projects_tree"):
+            self._refresh_projects_table()
+        if hasattr(self, "matrix_tree"):
+            self._refresh_matrix_table()
+
+        if not silent:
+            messagebox.showinfo(
+                "Đồng Bộ Antigravity Thành Công",
+                f"Đã hoàn tất đồng bộ dự án từ Antigravity SQLite Database:\n\n"
+                f"• Dự án mới phát hiện: {new_count}\n"
+                f"• Dự án cập nhật hội thoại: {updated_count}\n"
+                f"• Tổng số dự án khả dụng: {len(existing_projects)}"
+            )
+
+    def _pick_and_open_new_folder(self):
+        """
+        Mở Windows Folder Picker để người dùng chọn bất kỳ thư mục nào (Windows / WSL2 Z:).
+        Tự động ghi nhận vào danh sách dự án và sẵn sàng mở ngay với Antigravity.
+        """
+        chosen_dir = filedialog.askdirectory(
+            title="Chọn thư mục dự án mới...",
+            parent=self
+        )
+        if not chosen_dir:
+            return
+
+        norm_path = os.path.normpath(chosen_dir)
+        folder_name = os.path.basename(norm_path)
+        if not folder_name:
+            folder_name = norm_path
+        if folder_name.islower():
+            folder_name = folder_name.capitalize()
+
+        existing_projects = self.config_data.get("projects", [])
+        found_proj = None
+        norm_key = os.path.normcase(norm_path)
+
+        for pr in existing_projects:
+            if os.path.normcase(os.path.normpath(pr.get("path", ""))) == norm_key:
+                found_proj = pr
+                break
+
+        if not found_proj:
+            new_id = f"proj_folder_{hashlib.md5(norm_path.encode('utf-8')).hexdigest()[:8]}"
+            found_proj = {
+                "id": new_id,
+                "name": folder_name,
+                "path": norm_path,
+                "conv_count": 0,
+                "latest_title": ""
+            }
+            existing_projects.append(found_proj)
+            self.config_data["projects"] = existing_projects
+
+        self.config_data["last_project_id"] = found_proj["id"]
+        save_config(self.config_data)
+
+        self._refresh_comboboxes()
+        self._refresh_projects_table()
+        self._refresh_matrix_table()
+
+        # Chọn dự án vừa thêm vào combobox
+        for idx, pr in enumerate(self.config_data.get("projects", [])):
+            if pr["id"] == found_proj["id"]:
+                self.quick_project_cb.current(idx)
+                break
+
+        # Sẵn sàng mở ngay: Hỏi người dùng có muốn mở luôn không
+        if messagebox.askyesno(
+            "Đã Thêm Thư Mục Mới",
+            f"Đã ghi nhận dự án mới:\n- Tên: {found_proj['name']}\n- Thư mục: {found_proj['path']}\n\n"
+            f"Bạn có muốn khởi chạy Antigravity ngay cho dự án này không?"
+        ):
+            self._launch_single_selected()
+
     def _refresh_comboboxes(self):
         profiles = self.config_data.get("profiles", [])
         projects = self.config_data.get("projects", [])
 
         prof_names = [f"{p['name']} ({p['email']})" for p in profiles]
-        proj_names = [f"{pr['name']}" for pr in projects]
+        proj_names = [self._format_project_label(pr) for pr in projects]
 
         self.quick_profile_cb["values"] = prof_names
         last_prof_id = self.config_data.get("last_profile_id")
@@ -1240,6 +1710,8 @@ class SwarmManagerApp(tk.Tk):
                     selected_prof_idx = idx
                     break
         if prof_names:
+            if selected_prof_idx >= len(prof_names):
+                selected_prof_idx = 0
             self.quick_profile_cb.current(selected_prof_idx)
 
         self.quick_project_cb["values"] = proj_names
@@ -1251,6 +1723,8 @@ class SwarmManagerApp(tk.Tk):
                     selected_proj_idx = idx
                     break
         if proj_names:
+            if selected_proj_idx >= len(proj_names):
+                selected_proj_idx = 0
             self.quick_project_cb.current(selected_proj_idx)
 
     def _refresh_profiles_table(self):
@@ -1263,20 +1737,30 @@ class SwarmManagerApp(tk.Tk):
         for item in self.projects_tree.get_children():
             self.projects_tree.delete(item)
         for pr in self.config_data.get("projects", []):
-            self.projects_tree.insert("", tk.END, values=(pr["id"], pr["name"], pr["path"]))
+            cnt = pr.get("conv_count", 0)
+            cnt_str = str(cnt) if cnt else "-"
+            title_str = pr.get("latest_title", "")
+            self.projects_tree.insert(
+                "", tk.END,
+                values=(pr["id"], pr["name"], pr["path"], cnt_str, title_str)
+            )
 
     def _refresh_matrix_table(self):
         for item in self.matrix_tree.get_children():
             self.matrix_tree.delete(item)
 
         mappings = self.config_data.get("mappings", {})
-        projects = {pr["id"]: pr["name"] for pr in self.config_data.get("projects", [])}
-        default_proj_name = next(iter(projects.values())) if projects else "Chưa chọn dự án"
+        projects_dict = {pr["id"]: pr for pr in self.config_data.get("projects", [])}
+        default_proj = next(iter(projects_dict.values())) if projects_dict else None
+        default_label = self._format_project_label(default_proj) if default_proj else "Chưa chọn dự án"
 
         for p in self.config_data.get("profiles", []):
             pid = p["id"]
             assigned_proj_id = mappings.get(pid)
-            assigned_name = projects.get(assigned_proj_id, default_proj_name)
+            if assigned_proj_id and assigned_proj_id in projects_dict:
+                assigned_name = self._format_project_label(projects_dict[assigned_proj_id])
+            else:
+                assigned_name = default_label
             self.matrix_tree.insert("", tk.END, iid=pid, values=("✔ Có", p["name"], p["email"], assigned_name))
 
     def _matrix_select_all(self):
@@ -1309,33 +1793,31 @@ class SwarmManagerApp(tk.Tk):
                 messagebox.showwarning("Thông báo", "Vui lòng thêm Dự Án trong tab Quản Lý Dự Án trước.")
                 return
 
-            proj_names = [pr["name"] for pr in projects]
+            proj_labels = [self._format_project_label(pr) for pr in projects]
             dlg = tk.Toplevel(self)
             dlg.title("Gán Dự Án cho Profile")
-            dlg.geometry("380x150")
+            dlg.geometry("460x160")
             dlg.transient(self)
             dlg.grab_set()
 
             ttk.Label(dlg, text=f"Chọn dự án cho: {vals[1]}", font=("Segoe UI", 9, "bold")).pack(pady=10)
-            cb = ttk.Combobox(dlg, values=proj_names, state="readonly", width=30)
+            cb = ttk.Combobox(dlg, values=proj_labels, state="readonly", width=42)
             cb.pack(pady=5)
-            if vals[3] in proj_names:
+            if vals[3] in proj_labels:
                 cb.set(vals[3])
             else:
                 cb.current(0)
 
             def save_assign():
-                selected_name = cb.get()
-                vals[3] = selected_name
-                self.matrix_tree.item(item, values=vals)
-                # Lưu vào config
-                for pr in projects:
-                    if pr["name"] == selected_name:
-                        if "mappings" not in self.config_data:
-                            self.config_data["mappings"] = {}
-                        self.config_data["mappings"][item] = pr["id"]
-                        save_config(self.config_data)
-                        break
+                sel_idx = cb.current()
+                if 0 <= sel_idx < len(projects):
+                    target_pr = projects[sel_idx]
+                    vals[3] = self._format_project_label(target_pr)
+                    self.matrix_tree.item(item, values=vals)
+                    if "mappings" not in self.config_data:
+                        self.config_data["mappings"] = {}
+                    self.config_data["mappings"][item] = target_pr["id"]
+                    save_config(self.config_data)
                 dlg.destroy()
 
             ttk.Button(dlg, text="Xác nhận", command=save_assign).pack(pady=10)
@@ -1520,7 +2002,7 @@ class SwarmManagerApp(tk.Tk):
 
             if mode == "add":
                 new_id = f"proj_{int(time.time())}"
-                new_item = {"id": new_id, "name": name, "path": path}
+                new_item = {"id": new_id, "name": name, "path": path, "conv_count": 0, "latest_title": ""}
                 self.config_data.setdefault("projects", []).append(new_item)
             else:
                 p_id = initial_data["id"]
@@ -1622,7 +2104,7 @@ class SwarmManagerApp(tk.Tk):
             exe_path,
             f"--user-data-dir={profile_dir}"
         ]
-        if proj_path and os.path.exists(proj_path):
+        if proj_path:
             cmd.append(proj_path)
 
         try:
@@ -1687,6 +2169,7 @@ class SwarmManagerApp(tk.Tk):
         profiles = {p["id"]: p for p in self.config_data.get("profiles", [])}
         projects_by_id = {pr["id"]: pr for pr in self.config_data.get("projects", [])}
         projects_by_name = {pr["name"]: pr for pr in self.config_data.get("projects", [])}
+        projects_by_label = {self._format_project_label(pr): pr for pr in self.config_data.get("projects", [])}
         mappings = self.config_data.get("mappings", {})
 
         launch_pairs = []
@@ -1694,12 +2177,21 @@ class SwarmManagerApp(tk.Tk):
             vals = self.matrix_tree.item(item, "values")
             if vals[0] == "✔ Có":
                 prof_id = item
-                assigned_proj_name = vals[3]
+                assigned_proj_label = vals[3]
                 target_project = None
                 if prof_id in mappings and mappings[prof_id] in projects_by_id:
                     target_project = projects_by_id[mappings[prof_id]]
-                elif assigned_proj_name in projects_by_name:
-                    target_project = projects_by_name[assigned_proj_name]
+                elif assigned_proj_label in projects_by_label:
+                    target_project = projects_by_label[assigned_proj_label]
+                elif assigned_proj_label in projects_by_name:
+                    target_project = projects_by_name[assigned_proj_label]
+                else:
+                    # Bóc tách tên dự án gốc loại bỏ phần phụ lục (X convs - ...)
+                    clean_name = re.sub(r"\s*\(\d+\s*convs.*?\)$", "", assigned_proj_label).strip()
+                    if clean_name in projects_by_name:
+                        target_project = projects_by_name[clean_name]
+                    elif projects_by_id:
+                        target_project = next(iter(projects_by_id.values()))
 
                 if prof_id in profiles and target_project:
                     launch_pairs.append((profiles[prof_id], target_project))
