@@ -333,13 +333,18 @@ class SystemTrayManager:
         ready_event.wait(timeout=2.0)
 
     def _get_icon_handle(self):
-        # 1. Thử nạp icon từ file .ico nội bộ nếu có
+        # 1. Thử nạp icon từ file app_icon.ico
         search_dirs = [
-            os.path.dirname(os.path.abspath(__file__)),
-            r"C:\Users\maing\Desktop\Antigravity-MultiProject-Launcher"
+            r"C:\Users\maing\Desktop\Antigravity-MultiProject-Launcher",
+            os.path.dirname(os.path.abspath(__file__))
         ]
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+            search_dirs.insert(0, getattr(sys, '_MEIPASS', base_dir))
+            search_dirs.insert(0, base_dir)
+
         for d in search_dirs:
-            for name in ["icon.ico", "app.ico", "antigravity.ico", "favicon.ico"]:
+            for name in ["app_icon.ico", "icon.ico", "app.ico", "antigravity.ico", "favicon.ico"]:
                 p = os.path.join(d, name)
                 if os.path.isfile(p):
                     try:
@@ -349,12 +354,16 @@ class SystemTrayManager:
                     except Exception:
                         pass
 
-        # 2. Thử nạp icon từ module exe hiện tại
+        # 2. Thử nạp icon từ module exe hiện tại (ExtractIconExW)
         try:
-            h_inst = kernel32.GetModuleHandleW(None)
-            h = user32.LoadIconW(h_inst, ctypes.c_void_p(1))
-            if h:
-                return h
+            h_icon = wintypes.HICON()
+            shell32.ExtractIconExW.argtypes = [wintypes.LPCWSTR, ctypes.c_int, ctypes.POINTER(wintypes.HICON), ctypes.POINTER(wintypes.HICON), wintypes.UINT]
+            shell32.ExtractIconExW.restype = wintypes.UINT
+            exe_path = sys.executable if getattr(sys, 'frozen', False) else r"C:\Users\maing\Desktop\Antigravity-MultiProject-Launcher\AntigravitySwarmManager.exe"
+            if os.path.isfile(exe_path):
+                cnt = shell32.ExtractIconExW(exe_path, 0, None, ctypes.byref(h_icon), 1)
+                if cnt > 0 and h_icon.value:
+                    return h_icon.value
         except Exception:
             pass
 
@@ -835,6 +844,19 @@ class SwarmManagerApp(tk.Tk):
         self.title("Antigravity Swarm Manager - Quản Lý Đa Tài Khoản & Dự Án")
         self.geometry("980x700")
         self.minsize(850, 580)
+
+        # Set window icon
+        for p in [
+            os.path.join(getattr(sys, '_MEIPASS', ''), "app_icon.ico"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_icon.ico"),
+            r"C:\Users\maing\Desktop\Antigravity-MultiProject-Launcher\app_icon.ico"
+        ]:
+            if os.path.isfile(p):
+                try:
+                    self.iconbitmap(p)
+                    break
+                except Exception:
+                    pass
 
         # Style & Theme
         self.style = ttk.Style(self)

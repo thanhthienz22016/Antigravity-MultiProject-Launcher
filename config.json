@@ -28,7 +28,7 @@
         }
     ],
     "mappings": {},
-    "autostart": true,
-    "last_profile_id": "profile_1",
+    "autostart": false,
+    "last_profile_id": "profile_2",
     "last_project_id": "proj_timioffice"
 }
