@@ -2099,10 +2099,11 @@ class SwarmManagerApp(tk.Tk):
         os.makedirs(profile_dir, exist_ok=True)
         proj_path = os.path.expandvars(os.path.expanduser(project["path"]))
 
-        # Lệnh khởi chạy: --user-data-dir riêng biệt và mở workspace mới
+        # Lệnh khởi chạy: --user-data-dir riêng biệt, tự động bật remote debugging port cho Auto-Submit
         cmd = [
             exe_path,
-            f"--user-data-dir={profile_dir}"
+            f"--user-data-dir={profile_dir}",
+            "--remote-debugging-port=0"
         ]
         if proj_path:
             cmd.append(proj_path)

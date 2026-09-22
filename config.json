@@ -22,14 +22,109 @@
     ],
     "projects": [
         {
-            "id": "proj_timioffice",
-            "name": "Timioffice",
-            "path": "Z:\\home\\thanhthien\\projects\\timioffice"
+            "id": "proj_auto_d4067ee0",
+            "name": "Docker",
+            "path": "C:\\Docker",
+            "conv_count": 93,
+            "latest_title": "Check Laptop Internet Connection"
         },
         {
             "id": "proj_1790097803",
             "name": "Projects common",
-            "path": "Z:/home/thanhthien/projects"
+            "path": "Z:\\home\\thanhthien\\projects",
+            "conv_count": 81,
+            "latest_title": "LOTIUS.VN"
+        },
+        {
+            "id": "proj_timioffice",
+            "name": "Timioffice",
+            "path": "Z:\\home\\thanhthien\\projects\\timioffice",
+            "conv_count": 41,
+            "latest_title": "Start DDEV Project"
+        },
+        {
+            "id": "proj_auto_13b611e4",
+            "name": "Gecafe",
+            "path": "C:\\laragon\\www\\gecafe",
+            "conv_count": 25,
+            "latest_title": ""
+        },
+        {
+            "id": "proj_auto_d7d12f27",
+            "name": "baogiaTimioffice",
+            "path": "C:\\laragon\\www\\baogiaTimioffice",
+            "conv_count": 16,
+            "latest_title": ""
+        },
+        {
+            "id": "proj_auto_a6bd0fe8",
+            "name": "Ledsunmwnvn.wptangtoc-ols.com01gio_13_03_2026",
+            "path": "C:\\Users\\maing\\Downloads\\ledsunmwnvn.wptangtoc-ols.com01gio_13_03_2026",
+            "conv_count": 13,
+            "latest_title": ""
+        },
+        {
+            "id": "proj_auto_5d409e03",
+            "name": "Nguyenthanhthien",
+            "path": "C:\\laragon\\www\\nguyenthanhthien",
+            "conv_count": 7,
+            "latest_title": ""
+        },
+        {
+            "id": "proj_auto_149fec3e",
+            "name": "Lotius",
+            "path": "C:\\laragon\\www\\lotius",
+            "conv_count": 4,
+            "latest_title": ""
+        },
+        {
+            "id": "proj_auto_57504a08",
+            "name": "Demo-miccreative",
+            "path": "C:\\laragon\\www\\demo-miccreative",
+            "conv_count": 2,
+            "latest_title": ""
+        },
+        {
+            "id": "proj_auto_fae3996c",
+            "name": "Person Brand",
+            "path": "C:\\Users\\maing\\Desktop\\F8\\Person Brand",
+            "conv_count": 2,
+            "latest_title": ""
+        },
+        {
+            "id": "proj_auto_cc261b57",
+            "name": "Happy-birth-day",
+            "path": "C:\\Users\\maing\\Desktop\\happy-birth-day",
+            "conv_count": 1,
+            "latest_title": ""
+        },
+        {
+            "id": "proj_auto_1eda9ca5",
+            "name": "Timioffice",
+            "path": "\\\\wsl.localhost\\Ubuntu\\home\\thanhthien\\projects\\timioffice",
+            "conv_count": 1,
+            "latest_title": ""
+        },
+        {
+            "id": "proj_auto_ee57e3d3",
+            "name": "F8",
+            "path": "C:\\Users\\maing\\Desktop\\F8",
+            "conv_count": 1,
+            "latest_title": ""
+        },
+        {
+            "id": "proj_auto_7b245cbd",
+            "name": "Gecafe",
+            "path": "Z:\\home\\thanhthien\\projects\\gecafe",
+            "conv_count": 1,
+            "latest_title": "Kiểm Tra Dung Lượng Ổ C"
+        },
+        {
+            "id": "proj_auto_6076d069",
+            "name": "Test-zalo",
+            "path": "C:\\laragon\\www\\test-zalo",
+            "conv_count": 1,
+            "latest_title": ""
         }
     ],
     "mappings": {
