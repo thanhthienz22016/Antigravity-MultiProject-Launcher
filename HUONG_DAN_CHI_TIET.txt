@@ -1,0 +1,24 @@
+========================================================================
+ANTIGRAVITY SWARM MATRIX - HƯỚNG DẪN ĐIỀU PHỐI ĐA GMAIL X ĐA DỰ ÁN
+========================================================================
+
+1. NGUYÊN LÝ HOẠT ĐỘNG:
+- Mỗi file .bat mở một cửa sổ Antigravity độc lập hoàn toàn với Profile riêng.
+- Bạn có thể đăng nhập các Gmail khác nhau vào từng Profile (Gmail 1, Gmail 2, Gmail 3...).
+- Hạn ngạch (Quota), Token, Cookies và Lịch sử làm việc của từng Gmail hoàn toàn tách biệt.
+
+2. CÁCH LÀM NHIỀU AI TRÊN CÙNG 1 DỰ ÁN MÀ KHÔNG BỊ XUNG ĐỘT CODE (GIT WORKTREES):
+- Mở Terminal tại dự án gốc (ví dụ: z:\home\thanhthien\projects\timioffice).
+- Tạo Worktree mới bằng lệnh Git:
+    git worktree add ../timioffice-ai2 -b feature/frontend-redesign
+    git worktree add ../timioffice-ai3 -b feature/backend-api
+- Lúc này bạn có 3 thư mục độc lập hoàn toàn:
+    + Cửa sổ Profile 1 (Gmail 1) mở: z:\home\thanhthien\projects\timioffice
+    + Cửa sổ Profile 2 (Gmail 2) mở: z:\home\thanhthien\projects\timioffice-ai2
+    + Cửa sổ Profile 3 (Gmail 3) mở: z:\home\thanhthien\projects\timioffice-ai3
+- 3 AI sẽ code 3 tính năng song song cùng lúc, không bao giờ bị đè code lên nhau.
+- Sau khi xong, chỉ cần vào terminal gõ `git merge` để gộp code thành quả của 3 AI về nhánh chính!
+
+3. CÔNG CỤ SWARM MANAGER GUI:
+- Bấm đúp file `Mo_Manager_Da_Tai_Khoan.bat` để mở giao diện quản lý đa tài khoản & đa dự án bằng nút bấm trực quan.
+- Có nút "Mở đồng loạt tất cả tài khoản" để sẵn sàng dàn trận tác chiến nhanh.

@@ -1,0 +1,17 @@
+# Build & Cache Directories
+build/
+dist/
+__pycache__/
+
+# Executables & Backups
+*.exe
+*.exe.bak
+*.pyc
+
+# Local runtime data
+swarm_config.json
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
