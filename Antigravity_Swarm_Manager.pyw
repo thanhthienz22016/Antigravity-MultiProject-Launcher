@@ -960,10 +960,10 @@ class SwarmManagerApp(tk.Tk):
         # Lệnh khởi chạy: --user-data-dir riêng biệt và mở workspace mới
         cmd = [
             exe_path,
-            "--user-data-dir", profile_dir,
-            "--new-window",
-            proj_path
+            f"--user-data-dir={profile_dir}"
         ]
+        if proj_path and os.path.exists(proj_path):
+            cmd.append(proj_path)
 
         try:
             # Khởi chạy tiến trình độc lập
