@@ -1,0 +1,34 @@
+{
+    "antigravity_path": "C:\\Users\\maing\\AppData\\Local\\Programs\\Antigravity\\Antigravity.exe",
+    "profiles": [
+        {
+            "id": "profile_1",
+            "name": "Tài khoản Chính (Main)",
+            "email": "thanhthienz22016@gmail.com",
+            "data_dir": "C:\\Users\\maing\\AppData\\Roaming\\Antigravity_Profiles\\profile_main"
+        },
+        {
+            "id": "profile_2",
+            "name": "Tài khoản Phụ 1 (Dev)",
+            "email": "mainguyenz22016@gmail.com",
+            "data_dir": "C:\\Users\\maing\\AppData\\Roaming\\Antigravity_Profiles\\profile_dev1"
+        },
+        {
+            "id": "profile_1790094190",
+            "name": "Tài khoản Phụ 2 (Dev)",
+            "email": "thanhthienz22020@gmail.com",
+            "data_dir": "C:\\Users\\maing\\AppData\\Roaming\\Antigravity_Profiles\\profile_dev3"
+        }
+    ],
+    "projects": [
+        {
+            "id": "proj_timioffice",
+            "name": "Timioffice",
+            "path": "Z:\\home\\thanhthien\\projects\\timioffice"
+        }
+    ],
+    "mappings": {},
+    "autostart": true,
+    "last_profile_id": "profile_1",
+    "last_project_id": "proj_timioffice"
+}

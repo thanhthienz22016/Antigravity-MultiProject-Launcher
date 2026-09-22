@@ -2,12 +2,21 @@
 """
 Antigravity Swarm Manager (Multi-Account x Multi-Project Launcher)
 ==================================================================
-Phiên bản: 2.0 (Nâng cấp Pro)
+Phiên bản: 2.1 (Nâng Cấp Pro: System Tray & Windows Autostart)
 
 Tính năng chính:
 - [P0 - Win32 Title Hook]: Tự động đổi tiêu đề cửa sổ Antigravity & Taskbar Windows:
   "[Gmail: <Tên/Email>] - <Tên Dự Án> - Antigravity" giúp phân biệt tức thì các cửa sổ.
-- [P0 - Nhập liệu]: Hộp thoại thêm Profile cho phép nhập Tên hiển thị, Email/Ghi chú và thư mục lưu trữ.
+- [P0 - Khay Hệ Thống (System Tray)]: 
+  - Khi bấm tắt (dấu X), app tự động ẩn ngầm vào System Tray bên cạnh đồng hồ Windows.
+  - Click chuột hoặc double click vào icon khay để mở lại giao diện.
+  - Chuột phải vào tray icon mở menu: "🖥️ Mở Giao Diện", "💥 Đóng Tất Cả Cửa Sổ AI", "❌ Thoát Hoàn Toàn".
+- [P0 - Tự Khởi Động Cùng Windows]:
+  - Đăng ký vào Windows Registry (HKCU Run), tự khởi động ngầm vào System Tray khi bật máy (--tray).
+  - Tùy chọn Bật/Tắt trực tiếp trên giao diện người dùng.
+- [P0 - Lưu Cấu Hình Vĩnh Viễn]:
+  - Tự động lưu và nhớ đường dẫn Antigravity.exe, tài khoản Gmail và dự án đã chọn gần nhất.
+  - Bật máy lên chỉ việc vào app và chọn tài khoản + dự án làm việc ngay.
 - [P1 - Quản lý CRUD]: Thêm / Sửa / Xóa Profile và Dự án trực quan.
 - [P1 - Cảnh báo xung đột]: Tự động phát hiện và cảnh báo nguy cơ đè code khi nhiều Gmail
   cùng mở 1 thư mục dự án (khuyến nghị Git Worktree).
@@ -24,8 +33,10 @@ import threading
 import subprocess
 import glob
 from pathlib import Path
+import shutil
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
+import winreg
 
 # ---------------------------------------------------------------------------
 # Win32 API Integration (Pure ctypes, 64-bit safe, không cần cài pywin32)
@@ -35,8 +46,10 @@ from ctypes import wintypes
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
+shell32 = ctypes.windll.shell32
 
 WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
 
 TH32CS_SNAPPROCESS = 0x00000002
 
@@ -62,7 +75,23 @@ class RECT(ctypes.Structure):
         ("bottom", wintypes.LONG)
     ]
 
-# Setup exact ctypes prototypes for 64-bit Windows safety
+class WNDCLASSEXW(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.UINT),
+        ("style", wintypes.UINT),
+        ("lpfnWndProc", WNDPROC),
+        ("cbClsExtra", ctypes.c_int),
+        ("cbWndExtra", ctypes.c_int),
+        ("hInstance", wintypes.HINSTANCE),
+        ("hIcon", wintypes.HICON),
+        ("hCursor", wintypes.HICON),
+        ("hbrBackground", wintypes.HBRUSH),
+        ("lpszMenuName", wintypes.LPCWSTR),
+        ("lpszClassName", wintypes.LPCWSTR),
+        ("hIconSm", wintypes.HICON)
+    ]
+
+# Setup Win32 Process and Window API Prototypes
 kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
 kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
 
@@ -111,6 +140,383 @@ user32.SetForegroundWindow.restype = wintypes.BOOL
 user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 user32.PostMessageW.restype = wintypes.BOOL
 
+# Setup Win32 System Tray & Window Class API Prototypes
+user32.RegisterClassExW.argtypes = [ctypes.POINTER(WNDCLASSEXW)]
+user32.RegisterClassExW.restype = wintypes.ATOM
+
+user32.CreateWindowExW.argtypes = [
+    wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
+    ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+    wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID
+]
+user32.CreateWindowExW.restype = wintypes.HWND
+
+user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+user32.DefWindowProcW.restype = ctypes.c_ssize_t
+
+user32.DestroyWindow.argtypes = [wintypes.HWND]
+user32.DestroyWindow.restype = wintypes.BOOL
+
+user32.GetMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT]
+user32.GetMessageW.restype = wintypes.BOOL
+
+user32.TranslateMessage.argtypes = [ctypes.POINTER(wintypes.MSG)]
+user32.TranslateMessage.restype = wintypes.BOOL
+
+user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
+user32.DispatchMessageW.restype = ctypes.c_ssize_t
+
+user32.PostQuitMessage.argtypes = [ctypes.c_int]
+user32.PostQuitMessage.restype = None
+
+user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+user32.GetCursorPos.restype = wintypes.BOOL
+
+user32.LoadIconW.argtypes = [wintypes.HINSTANCE, ctypes.c_void_p]
+user32.LoadIconW.restype = wintypes.HICON
+
+user32.LoadImageW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+user32.LoadImageW.restype = wintypes.HANDLE
+
+user32.CreatePopupMenu.argtypes = []
+user32.CreatePopupMenu.restype = wintypes.HMENU
+
+user32.AppendMenuW.argtypes = [wintypes.HMENU, wintypes.UINT, ctypes.c_size_t, wintypes.LPCWSTR]
+user32.AppendMenuW.restype = wintypes.BOOL
+
+user32.TrackPopupMenu.argtypes = [
+    wintypes.HMENU, wintypes.UINT, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+    wintypes.HWND, ctypes.c_void_p
+]
+user32.TrackPopupMenu.restype = wintypes.UINT
+
+user32.DestroyMenu.argtypes = [wintypes.HMENU]
+user32.DestroyMenu.restype = wintypes.BOOL
+
+# ---------------------------------------------------------------------------
+# Constants for System Tray & Win32 Popup Menu
+# ---------------------------------------------------------------------------
+NIM_ADD = 0x00000000
+NIM_MODIFY = 0x00000001
+NIM_DELETE = 0x00000002
+NIM_SETVERSION = 0x00000004
+
+NIF_MESSAGE = 0x00000001
+NIF_ICON = 0x00000002
+NIF_TIP = 0x00000004
+NIF_INFO = 0x00000010
+
+NIIF_INFO = 0x00000001
+NIIF_WARNING = 0x00000002
+NIIF_ERROR = 0x00000003
+
+WM_USER = 0x0400
+WM_TRAYICON = WM_USER + 1024
+
+WM_LBUTTONUP = 0x0202
+WM_LBUTTONDBLCLK = 0x0203
+WM_RBUTTONUP = 0x0205
+WM_CONTEXTMENU = 0x007B
+WM_DESTROY = 0x0002
+WM_CLOSE = 0x0010
+
+IMAGE_ICON = 1
+LR_LOADFROMFILE = 0x00000010
+IDI_APPLICATION = 32512
+
+# Win32 Menu Flags and Command IDs
+MF_STRING = 0x00000000
+MF_SEPARATOR = 0x00000800
+TPM_RIGHTBUTTON = 0x0002
+TPM_RETURNCMD = 0x0100
+TPM_NONOTIFY = 0x0080
+
+ID_TRAY_OPEN = 1001
+ID_TRAY_KILL_ALL = 1002
+ID_TRAY_QUIT = 1003
+
+class NOTIFYICONDATAW(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("hWnd", wintypes.HWND),
+        ("uID", wintypes.UINT),
+        ("uFlags", wintypes.UINT),
+        ("uCallbackMessage", wintypes.UINT),
+        ("hIcon", wintypes.HICON),
+        ("szTip", ctypes.c_wchar * 128),
+        ("dwState", wintypes.DWORD),
+        ("dwStateMask", wintypes.DWORD),
+        ("szInfo", ctypes.c_wchar * 256),
+        ("uTimeoutOrVersion", wintypes.UINT),
+        ("szInfoTitle", ctypes.c_wchar * 64),
+        ("dwInfoFlags", wintypes.DWORD),
+        ("guidItem", ctypes.c_byte * 16),
+        ("hBalloonIcon", wintypes.HICON)
+    ]
+
+shell32.Shell_NotifyIconW.argtypes = [wintypes.DWORD, ctypes.POINTER(NOTIFYICONDATAW)]
+shell32.Shell_NotifyIconW.restype = wintypes.BOOL
+
+
+# ---------------------------------------------------------------------------
+# Windows Registry Autostart Management
+# ---------------------------------------------------------------------------
+REG_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+REG_APP_NAME = "AntigravitySwarmManager"
+DESKTOP_EXE_PATH = r"C:\Users\maing\Desktop\Antigravity-MultiProject-Launcher\AntigravitySwarmManager.exe"
+
+def get_registered_exe_path():
+    """Xác định đường dẫn file exe phù hợp để đăng ký vào Registry Run."""
+    if getattr(sys, 'frozen', False):
+        return sys.executable
+    if os.path.isfile(DESKTOP_EXE_PATH):
+        return DESKTOP_EXE_PATH
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    local_exe = os.path.join(script_dir, "AntigravitySwarmManager.exe")
+    if os.path.isfile(local_exe):
+        return local_exe
+    return DESKTOP_EXE_PATH
+
+def is_autostart_registered() -> bool:
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_RUN_KEY, 0, winreg.KEY_READ) as key:
+            val, _ = winreg.QueryValueEx(key, REG_APP_NAME)
+            return bool(val)
+    except Exception:
+        return False
+
+def set_autostart_registry(enable: bool) -> bool:
+    try:
+        if enable:
+            exe = get_registered_exe_path()
+            cmd = f'"{exe}" --tray'
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, REG_RUN_KEY) as key:
+                winreg.SetValueEx(key, REG_APP_NAME, 0, winreg.REG_SZ, cmd)
+        else:
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+                    winreg.DeleteValue(key, REG_APP_NAME)
+            except FileNotFoundError:
+                pass
+        return True
+    except Exception as e:
+        print(f"Lỗi thiết lập Registry Run: {e}")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Pure ctypes Win32 System Tray Manager (Native Menu, Không phụ thuộc thư viện ngoài)
+# ---------------------------------------------------------------------------
+class SystemTrayManager:
+    """
+    Quản lý icon khay hệ thống (System Tray) bằng Win32 API thuần (ctypes).
+    Chạy trong luồng ngầm độc lập với native Win32 context menu,
+    tự động giải phóng chuột khi click ra ngoài, và giao tiếp an toàn với Tkinter main loop.
+    """
+    def __init__(self, tooltip="Antigravity Swarm Manager", on_open=None, on_kill_all=None, on_quit=None):
+        self.tooltip = tooltip
+        self.on_open = on_open
+        self.on_kill_all = on_kill_all
+        self.on_quit = on_quit
+        self.hwnd = None
+        self.nid = None
+        self.thread = None
+        self.running = False
+        self._last_click_time = 0.0
+        self._wndproc_ref = None # Giữ reference chống bị garbage collection
+        self._start_tray_thread()
+
+    def _start_tray_thread(self):
+        ready_event = threading.Event()
+        self.thread = threading.Thread(target=self._run_message_loop, args=(ready_event,), daemon=True)
+        self.thread.start()
+        ready_event.wait(timeout=2.0)
+
+    def _get_icon_handle(self):
+        # 1. Thử nạp icon từ file .ico nội bộ nếu có
+        search_dirs = [
+            os.path.dirname(os.path.abspath(__file__)),
+            r"C:\Users\maing\Desktop\Antigravity-MultiProject-Launcher"
+        ]
+        for d in search_dirs:
+            for name in ["icon.ico", "app.ico", "antigravity.ico", "favicon.ico"]:
+                p = os.path.join(d, name)
+                if os.path.isfile(p):
+                    try:
+                        h = user32.LoadImageW(None, p, IMAGE_ICON, 16, 16, LR_LOADFROMFILE)
+                        if h:
+                            return h
+                    except Exception:
+                        pass
+
+        # 2. Thử nạp icon từ module exe hiện tại
+        try:
+            h_inst = kernel32.GetModuleHandleW(None)
+            h = user32.LoadIconW(h_inst, ctypes.c_void_p(1))
+            if h:
+                return h
+        except Exception:
+            pass
+
+        # 3. Fallback: Icon mặc định của Windows
+        try:
+            h = user32.LoadIconW(None, ctypes.c_void_p(IDI_APPLICATION))
+            if h:
+                return h
+        except Exception:
+            pass
+        return 0
+
+    def _wndproc(self, hwnd, msg, wparam, lparam):
+        if msg == WM_TRAYICON:
+            if lparam == WM_LBUTTONDBLCLK:
+                self._last_click_time = time.time()
+                if self.on_open:
+                    self.on_open()
+                return 0
+            elif lparam == WM_LBUTTONUP:
+                now = time.time()
+                # Debounce: chỉ kích hoạt khi không trùng double-click trong 0.4s
+                if now - self._last_click_time > 0.4:
+                    self._last_click_time = now
+                    if self.on_open:
+                        self.on_open()
+                return 0
+            elif lparam in (WM_RBUTTONUP, WM_CONTEXTMENU):
+                pt = wintypes.POINT()
+                user32.GetCursorPos(ctypes.byref(pt))
+                user32.SetForegroundWindow(hwnd)
+
+                h_menu = user32.CreatePopupMenu()
+                user32.AppendMenuW(h_menu, MF_STRING, ID_TRAY_OPEN, "🖥️  Mở Giao Diện")
+                user32.AppendMenuW(h_menu, MF_STRING, ID_TRAY_KILL_ALL, "💥  Đóng Tất Cả Cửa Sổ AI")
+                user32.AppendMenuW(h_menu, MF_SEPARATOR, 0, None)
+                user32.AppendMenuW(h_menu, MF_STRING, ID_TRAY_QUIT, "❌  Thoát Hoàn Toàn")
+
+                cmd = user32.TrackPopupMenu(
+                    h_menu,
+                    TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+                    pt.x, pt.y,
+                    0,
+                    hwnd,
+                    None
+                )
+                # Standard Win32 fix: post WM_NULL để Windows tự đóng menu khi click ra ngoài
+                user32.PostMessageW(hwnd, 0, 0, 0)
+                user32.DestroyMenu(h_menu)
+
+                if cmd == ID_TRAY_OPEN and self.on_open:
+                    self.on_open()
+                elif cmd == ID_TRAY_KILL_ALL and self.on_kill_all:
+                    self.on_kill_all()
+                elif cmd == ID_TRAY_QUIT and self.on_quit:
+                    self.on_quit()
+                return 0
+        elif msg == WM_DESTROY:
+            user32.PostQuitMessage(0)
+            return 0
+        return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+    def _run_message_loop(self, ready_event):
+        self.running = True
+        h_inst = kernel32.GetModuleHandleW(None)
+        class_name = f"AntigravityTrayWnd_{int(time.time() * 1000)}"
+
+        self._wndproc_ref = WNDPROC(self._wndproc)
+
+        wc = WNDCLASSEXW()
+        wc.cbSize = ctypes.sizeof(WNDCLASSEXW)
+        wc.style = 0
+        wc.lpfnWndProc = self._wndproc_ref
+        wc.cbClsExtra = 0
+        wc.cbWndExtra = 0
+        wc.hInstance = h_inst
+        wc.hIcon = 0
+        wc.hCursor = 0
+        wc.hbrBackground = 0
+        wc.lpszMenuName = None
+        wc.lpszClassName = class_name
+        wc.hIconSm = 0
+
+        reg = user32.RegisterClassExW(ctypes.byref(wc))
+        if not reg:
+            ready_event.set()
+            return
+
+        self.hwnd = user32.CreateWindowExW(
+            0, class_name, "AntigravityTrayWindow",
+            0, 0, 0, 0, 0,
+            0, 0, h_inst, None
+        )
+
+        if not self.hwnd:
+            ready_event.set()
+            return
+
+        h_icon = self._get_icon_handle()
+
+        self.nid = NOTIFYICONDATAW()
+        self.nid.cbSize = ctypes.sizeof(NOTIFYICONDATAW)
+        self.nid.hWnd = self.hwnd
+        self.nid.uID = 2024
+        self.nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP
+        self.nid.uCallbackMessage = WM_TRAYICON
+        self.nid.hIcon = h_icon
+        self.nid.szTip = self.tooltip[:127]
+
+        shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(self.nid))
+        ready_event.set()
+
+        msg = wintypes.MSG()
+        while self.running:
+            res = user32.GetMessageW(ctypes.byref(msg), 0, 0, 0)
+            if res <= 0:
+                break
+            user32.TranslateMessage(ctypes.byref(msg))
+            user32.DispatchMessageW(ctypes.byref(msg))
+
+        if self.nid and self.hwnd:
+            try:
+                shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(self.nid))
+            except Exception:
+                pass
+        if self.hwnd:
+            try:
+                user32.DestroyWindow(self.hwnd)
+            except Exception:
+                pass
+
+    def show_balloon(self, title, message):
+        """Hiển thị thông báo Toast / Balloon tooltip trên khay hệ thống."""
+        if not self.nid or not self.hwnd:
+            return
+        try:
+            self.nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_INFO
+            self.nid.szInfoTitle = title[:63]
+            self.nid.szInfo = message[:255]
+            self.nid.dwInfoFlags = NIIF_INFO
+            shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(self.nid))
+        except Exception as e:
+            print(f"Lỗi show_balloon: {e}")
+
+    def destroy(self):
+        """Dừng luồng khay và gỡ icon khỏi Windows Taskbar."""
+        self.running = False
+        if self.hwnd:
+            if self.nid:
+                try:
+                    shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(self.nid))
+                except Exception:
+                    pass
+            try:
+                user32.PostMessageW(self.hwnd, WM_CLOSE, 0, 0)
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# Tiến trình con & Tiêu đề cửa sổ (Process Tree & Window Title Functions)
+# ---------------------------------------------------------------------------
 def get_child_pids(parent_pid):
     """Lấy danh sách tất cả PID con của một tiến trình cha (O(N) BFS traversal)."""
     pids = {parent_pid}
@@ -216,20 +622,54 @@ def kill_process_tree(pid, hwnd=None, extra_pids=None):
         except Exception as e:
             print(f"Lỗi khi kill PID {p}: {e}")
 
+
 # ---------------------------------------------------------------------------
-# Cấu hình & Dữ liệu
+# Cấu hình & Dữ liệu Vĩnh Viễn (Config & Persistence)
 # ---------------------------------------------------------------------------
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Antigravity_Swarm_Manager")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+LOCAL_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+DESKTOP_CONFIG_FILE = os.path.join(r"C:\Users\maing\Desktop\Antigravity-MultiProject-Launcher", "config.json")
 
 def get_default_antigravity_path():
-    """Tự động tìm kiếm đường dẫn thực thi của Antigravity.exe."""
+    """Tự động tìm kiếm đường dẫn thực thi của Antigravity.exe trong Registry và hệ thống."""
+    # 1. Thử tìm qua Registry App Paths (chuẩn Windows)
+    for root_hkey in [winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE]:
+        for subkey in [
+            r"Software\Microsoft\Windows\CurrentVersion\App Paths\Antigravity.exe",
+            r"Software\Microsoft\Windows\CurrentVersion\App Paths\antigravity.exe"
+        ]:
+            try:
+                with winreg.OpenKey(root_hkey, subkey) as k:
+                    val, _ = winreg.QueryValueEx(k, "")
+                    if val and os.path.isfile(val):
+                        return val
+            except Exception:
+                pass
+
+    # 2. Thử tìm qua PATH môi trường
+    try:
+        which_path = shutil.which("Antigravity.exe") or shutil.which("antigravity.exe") or shutil.which("antigravity")
+        if which_path and os.path.isfile(which_path):
+            return which_path
+    except Exception:
+        pass
+
+    # 3. Thử tìm qua các thư mục cài đặt tiêu chuẩn
     local_app_data = os.environ.get("LOCALAPPDATA", "")
     program_files = os.environ.get("ProgramFiles", "")
+    program_files_x86 = os.environ.get("ProgramFiles(x86)", "")
+    user_profile = os.environ.get("USERPROFILE", "")
     candidates = [
         os.path.join(local_app_data, "Programs", "Antigravity", "Antigravity.exe"),
+        os.path.join(local_app_data, "Programs", "antigravity", "Antigravity.exe"),
         os.path.join(local_app_data, "Antigravity", "Antigravity.exe"),
+        os.path.join(local_app_data, "antigravity", "Antigravity.exe"),
+        os.path.join(local_app_data, "Google", "Antigravity", "Antigravity.exe"),
         os.path.join(program_files, "Antigravity", "Antigravity.exe"),
+        os.path.join(program_files_x86, "Antigravity", "Antigravity.exe"),
+        os.path.join(user_profile, r"AppData\Local\Programs\Antigravity\Antigravity.exe"),
+        r"C:\Users\maing\AppData\Local\Programs\Antigravity\Antigravity.exe"
     ]
     for c in candidates:
         if os.path.isfile(c):
@@ -237,17 +677,30 @@ def get_default_antigravity_path():
     return ""
 
 def load_config():
+    """Đọc cấu hình vĩnh viễn với cơ chế kiểm tra nhiều vị trí và ưu tiên file mới nhất theo mtime."""
     os.makedirs(CONFIG_DIR, exist_ok=True)
-    if os.path.exists(CONFIG_FILE):
+    candidate_files = [CONFIG_FILE, LOCAL_CONFIG_FILE, DESKTOP_CONFIG_FILE]
+    existing_files = [f for f in candidate_files if os.path.isfile(f)]
+    # Sắp xếp file theo modification time giảm dần (mới nhất lên đầu)
+    existing_files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+
+    cfg = None
+    for target_file in existing_files:
         try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+            with open(target_file, "r", encoding="utf-8") as fp:
+                loaded = json.load(fp)
+                if isinstance(loaded, dict) and loaded:
+                    cfg = loaded
+                    break
         except Exception:
             pass
 
     default_profiles_base = os.path.join(os.environ.get("APPDATA", ""), "Antigravity_Profiles")
     default_config = {
         "antigravity_path": get_default_antigravity_path(),
+        "autostart": True,
+        "last_profile_id": "profile_1",
+        "last_project_id": "proj_timioffice",
         "profiles": [
             {
                 "id": "profile_1",
@@ -271,13 +724,41 @@ def load_config():
         ],
         "mappings": {}
     }
-    save_config(default_config)
-    return default_config
+
+    if not cfg:
+        cfg = default_config
+    else:
+        # Bảo đảm các trường bắt buộc luôn hiện diện
+        for k, v in default_config.items():
+            if k not in cfg or cfg[k] is None:
+                cfg[k] = v
+
+    # Nếu antigravity_path trong config rỗng hoặc không tồn tại, thử tìm lại tự động
+    if not cfg.get("antigravity_path") or not os.path.isfile(cfg["antigravity_path"]):
+        detected = get_default_antigravity_path()
+        if detected:
+            cfg["antigravity_path"] = detected
+
+    save_config(cfg)
+    return cfg
 
 def save_config(cfg):
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=4, ensure_ascii=False)
+    """Lưu vĩnh viễn cấu hình vào %APPDATA% và đồng bộ thư mục Desktop/Local."""
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=4, ensure_ascii=False)
+    except Exception as e:
+        print(f"Lỗi lưu config vào {CONFIG_FILE}: {e}")
+
+    for target in [LOCAL_CONFIG_FILE, DESKTOP_CONFIG_FILE]:
+        try:
+            d = os.path.dirname(target)
+            if os.path.isdir(d):
+                with open(target, "w", encoding="utf-8") as f:
+                    json.dump(cfg, f, indent=4, ensure_ascii=False)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -342,14 +823,18 @@ class WindowTitleHook(threading.Thread):
 
 
 # ---------------------------------------------------------------------------
-# Giao Diện Người Dùng (GUI)
+# Giao Diện Người Dùng (GUI) & Quản Lý Khay Hệ Thống
 # ---------------------------------------------------------------------------
 class SwarmManagerApp(tk.Tk):
-    def __init__(self):
+    def __init__(self, start_in_tray=False):
         super().__init__()
+        # Nếu được gọi tự khởi động với --tray / --minimized: Ẩn ngay lập tức từ đầu để triệt tiêu nhấp nháy cửa sổ
+        if start_in_tray:
+            self.withdraw()
+
         self.title("Antigravity Swarm Manager - Quản Lý Đa Tài Khoản & Dự Án")
-        self.geometry("980x680")
-        self.minsize(850, 550)
+        self.geometry("980x700")
+        self.minsize(850, 580)
 
         # Style & Theme
         self.style = ttk.Style(self)
@@ -359,7 +844,15 @@ class SwarmManagerApp(tk.Tk):
         self.running_instances = [] # list of dicts: pid, proc, profile, project, start_time, hwnd, hook_thread
 
         self._build_ui()
+        self._setup_system_tray()
         self._start_monitor_timer()
+
+        # Khi bấm nút [X] đóng cửa sổ: Ẩn vào khay hệ thống (System Tray)
+        self.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
+
+        # Nếu không ở chế độ tray: Hiển thị giao diện bình thường
+        if not start_in_tray:
+            self.deiconify()
 
     def _setup_theme(self):
         try:
@@ -375,6 +868,88 @@ class SwarmManagerApp(tk.Tk):
         self.style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"))
         self.style.configure("Treeview", font=("Segoe UI", 9), rowheight=26)
 
+    def _setup_system_tray(self):
+        """Khởi tạo SystemTrayManager với native Win32 context menu."""
+        self.tray = SystemTrayManager(
+            tooltip="Antigravity Swarm Manager",
+            on_open=lambda: self.after(0, self.show_window),
+            on_kill_all=lambda: self.after(0, self._tray_kill_all),
+            on_quit=lambda: self.after(0, self.quit_app)
+        )
+
+    def show_window(self):
+        """Hiện lại cửa sổ chính từ khay hệ thống và đưa lên trước màn hình."""
+        self.deiconify()
+        self.state("normal")
+        self.lift()
+        self.attributes("-topmost", True)
+        self.after(50, lambda: self.attributes("-topmost", False))
+        self.focus_force()
+
+    def hide_to_tray(self):
+        """Ẩn cửa sổ vào khay icon và hiển thị thông báo Toast."""
+        self.withdraw()
+        self._save_current_state()
+        if self.tray:
+            self.tray.show_balloon(
+                "Antigravity Swarm Manager",
+                "Ứng dụng đang chạy ngầm trong khay hệ thống (System Tray).\nNhấp chuột hoặc click đúp vào icon để mở lại."
+            )
+
+    def _tray_kill_all(self):
+        self.show_window()
+        self._kill_all_instances()
+
+    def quit_app(self):
+        """Đóng hoàn toàn ứng dụng sau khi xác nhận dừng các tiến trình."""
+        running = [inst for inst in self.running_instances if inst.get("status") == "🟢 Running"]
+        if running:
+            self.show_window()
+            if not messagebox.askyesno(
+                "Thoát Hoàn Toàn",
+                f"Hiện vẫn còn {len(running)} cửa sổ Antigravity đang hoạt động.\n"
+                "Bạn có chắc chắn muốn đóng tất cả các cửa sổ AI và thoát ứng dụng không?"
+            ):
+                return
+            for inst in running:
+                kill_process_tree(inst["pid"], hwnd=inst.get("hwnd"), extra_pids=inst.get("known_pids"))
+                inst["status"] = "⚪ Killed"
+                if "hook_thread" in inst:
+                    inst["hook_thread"].stop_event.set()
+
+        self._save_current_state()
+        if self.tray:
+            self.tray.destroy()
+        self.destroy()
+        sys.exit(0)
+
+    def _save_current_state(self):
+        """Lưu tự động các giá trị hiện hành vào config.json."""
+        try:
+            if hasattr(self, "exe_entry"):
+                exe_p = self.exe_entry.get().strip()
+                if exe_p:
+                    self.config_data["antigravity_path"] = exe_p
+
+            if hasattr(self, "quick_profile_cb"):
+                p_idx = self.quick_profile_cb.current()
+                profiles = self.config_data.get("profiles", [])
+                if 0 <= p_idx < len(profiles):
+                    self.config_data["last_profile_id"] = profiles[p_idx]["id"]
+
+            if hasattr(self, "quick_project_cb"):
+                pr_idx = self.quick_project_cb.current()
+                projects = self.config_data.get("projects", [])
+                if 0 <= pr_idx < len(projects):
+                    self.config_data["last_project_id"] = projects[pr_idx]["id"]
+
+            if hasattr(self, "autostart_var"):
+                self.config_data["autostart"] = self.autostart_var.get()
+
+            save_config(self.config_data)
+        except Exception as e:
+            print(f"Lỗi lưu trạng thái: {e}")
+
     def _build_ui(self):
         # 1. Header Frame
         header_frame = ttk.Frame(self, padding=12)
@@ -385,19 +960,48 @@ class SwarmManagerApp(tk.Tk):
 
         desc_lbl = ttk.Label(
             header_frame,
-            text="Hệ thống vận hành song song nhiều tài khoản Gmail & nhiều dự án với tính năng gắn nhãn cửa sổ tự động.",
+            text="Hệ thống vận hành song song nhiều tài khoản Gmail & nhiều dự án với tính năng khay hệ thống tự động.",
             style="SubHeader.TLabel"
         )
         desc_lbl.pack(anchor=tk.W)
 
         # Path to Antigravity.exe bar
-        exe_frame = ttk.Frame(header_frame, padding=(0, 8, 0, 0))
+        exe_frame = ttk.Frame(header_frame, padding=(0, 6, 0, 0))
         exe_frame.pack(fill=tk.X)
         ttk.Label(exe_frame, text="Antigravity EXE:").pack(side=tk.LEFT)
         self.exe_entry = ttk.Entry(exe_frame)
         self.exe_entry.insert(0, self.config_data.get("antigravity_path", ""))
         self.exe_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8)
+        self.exe_entry.bind("<FocusOut>", lambda e: self._save_current_state())
+        self.exe_entry.bind("<KeyRelease>", lambda e: self._save_current_state())
         ttk.Button(exe_frame, text="Duyệt...", command=self._browse_antigravity_exe).pack(side=tk.LEFT)
+
+        # Autostart & Tray hints bar
+        options_frame = ttk.Frame(header_frame, padding=(0, 6, 0, 0))
+        options_frame.pack(fill=tk.X)
+
+        is_reg = is_autostart_registered()
+        cfg_auto = self.config_data.get("autostart", True)
+        self.autostart_var = tk.BooleanVar(value=is_reg or cfg_auto)
+
+        # Tự động đồng bộ Registry nếu config yêu cầu bật
+        if cfg_auto and not is_reg:
+            set_autostart_registry(True)
+
+        autostart_cb = ttk.Checkbutton(
+            options_frame,
+            text="🔄 Tự khởi động cùng Windows khi bật máy (Chạy ngầm dưới khay icon)",
+            variable=self.autostart_var,
+            command=self._on_toggle_autostart
+        )
+        autostart_cb.pack(side=tk.LEFT)
+
+        status_tray_lbl = ttk.Label(
+            options_frame,
+            text="💡 Khi bấm [X] tắt cửa sổ, app vẫn chạy dưới khay icon bên cạnh đồng hồ",
+            style="SubHeader.TLabel"
+        )
+        status_tray_lbl.pack(side=tk.RIGHT)
 
         # 2. Tabs: [Bảng Điều Khiển Launch], [Quản Lý Profiles], [Quản Lý Dự Án], [Giám Sát Realtime]
         self.notebook = ttk.Notebook(self, padding=8)
@@ -418,6 +1022,21 @@ class SwarmManagerApp(tk.Tk):
         self._build_projects_tab()
         self._build_monitor_tab()
 
+    def _on_toggle_autostart(self):
+        enabled = self.autostart_var.get()
+        success = set_autostart_registry(enabled)
+        self.config_data["autostart"] = enabled
+        save_config(self.config_data)
+        if success:
+            state_str = "BẬT" if enabled else "TẮT"
+            messagebox.showinfo(
+                "Tự khởi động cùng Windows",
+                f"Đã {state_str} thành công tính năng tự khởi động cùng Windows khi bật máy.\n"
+                f"Ứng dụng sẽ tự động chạy ngầm dưới khay icon khi bạn mở máy tính."
+            )
+        else:
+            messagebox.showerror("Lỗi", "Không thể ghi thiết lập vào Windows Registry.")
+
     # -----------------------------------------------------------------------
     # TAB 1: KHỞI CHẠY MATRIX
     # -----------------------------------------------------------------------
@@ -432,10 +1051,12 @@ class SwarmManagerApp(tk.Tk):
         ttk.Label(q_grid, text="Chọn Profile:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
         self.quick_profile_cb = ttk.Combobox(q_grid, state="readonly", width=35)
         self.quick_profile_cb.grid(row=0, column=1, padx=5, pady=5)
+        self.quick_profile_cb.bind("<<ComboboxSelected>>", lambda e: self._save_current_state())
 
         ttk.Label(q_grid, text="Chọn Dự Án:").grid(row=0, column=2, sticky=tk.W, padx=15, pady=5)
         self.quick_project_cb = ttk.Combobox(q_grid, state="readonly", width=35)
         self.quick_project_cb.grid(row=0, column=3, padx=5, pady=5)
+        self.quick_project_cb.bind("<<ComboboxSelected>>", lambda e: self._save_current_state())
 
         btn_launch_single = ttk.Button(q_grid, text="▶ Mở Cửa Sổ Này", command=self._launch_single_selected)
         btn_launch_single.grid(row=0, column=4, padx=15, pady=5)
@@ -582,16 +1203,33 @@ class SwarmManagerApp(tk.Tk):
             save_config(self.config_data)
 
     def _refresh_comboboxes(self):
-        prof_names = [f"{p['name']} ({p['email']})" for p in self.config_data.get("profiles", [])]
-        proj_names = [f"{pr['name']}" for pr in self.config_data.get("projects", [])]
+        profiles = self.config_data.get("profiles", [])
+        projects = self.config_data.get("projects", [])
+
+        prof_names = [f"{p['name']} ({p['email']})" for p in profiles]
+        proj_names = [f"{pr['name']}" for pr in projects]
 
         self.quick_profile_cb["values"] = prof_names
+        last_prof_id = self.config_data.get("last_profile_id")
+        selected_prof_idx = 0
+        if last_prof_id:
+            for idx, p in enumerate(profiles):
+                if p.get("id") == last_prof_id:
+                    selected_prof_idx = idx
+                    break
         if prof_names:
-            self.quick_profile_cb.current(0)
+            self.quick_profile_cb.current(selected_prof_idx)
 
         self.quick_project_cb["values"] = proj_names
+        last_proj_id = self.config_data.get("last_project_id")
+        selected_proj_idx = 0
+        if last_proj_id:
+            for idx, pr in enumerate(projects):
+                if pr.get("id") == last_proj_id:
+                    selected_proj_idx = idx
+                    break
         if proj_names:
-            self.quick_project_cb.current(0)
+            self.quick_project_cb.current(selected_proj_idx)
 
     def _refresh_profiles_table(self):
         for item in self.profiles_tree.get_children():
@@ -988,6 +1626,7 @@ class SwarmManagerApp(tk.Tk):
             instance_info["hook_thread"] = hook
 
             self.running_instances.append(instance_info)
+            self._save_current_state()
             return True
         except Exception as e:
             messagebox.showerror("Lỗi khởi chạy", f"Không thể mở Antigravity: {e}")
@@ -1024,7 +1663,9 @@ class SwarmManagerApp(tk.Tk):
     def _launch_matrix(self):
         """Khởi chạy đồng loạt tất cả các cặp đã được chọn trong bảng Matrix."""
         profiles = {p["id"]: p for p in self.config_data.get("profiles", [])}
-        projects = {pr["name"]: pr for pr in self.config_data.get("projects", [])}
+        projects_by_id = {pr["id"]: pr for pr in self.config_data.get("projects", [])}
+        projects_by_name = {pr["name"]: pr for pr in self.config_data.get("projects", [])}
+        mappings = self.config_data.get("mappings", {})
 
         launch_pairs = []
         for item in self.matrix_tree.get_children():
@@ -1032,8 +1673,14 @@ class SwarmManagerApp(tk.Tk):
             if vals[0] == "✔ Có":
                 prof_id = item
                 assigned_proj_name = vals[3]
-                if prof_id in profiles and assigned_proj_name in projects:
-                    launch_pairs.append((profiles[prof_id], projects[assigned_proj_name]))
+                target_project = None
+                if prof_id in mappings and mappings[prof_id] in projects_by_id:
+                    target_project = projects_by_id[mappings[prof_id]]
+                elif assigned_proj_name in projects_by_name:
+                    target_project = projects_by_name[assigned_proj_name]
+
+                if prof_id in profiles and target_project:
+                    launch_pairs.append((profiles[prof_id], target_project))
 
         if not launch_pairs:
             messagebox.showwarning("Cảnh báo", "Chưa có tài khoản nào được chọn để mở (cột 'Kích hoạt' là '✔ Có').")
@@ -1162,5 +1809,6 @@ class SwarmManagerApp(tk.Tk):
 # Entry Point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    app = SwarmManagerApp()
+    is_tray_mode = ("--tray" in sys.argv) or ("--minimized" in sys.argv)
+    app = SwarmManagerApp(start_in_tray=is_tray_mode)
     app.mainloop()
