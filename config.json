@@ -1,17 +1,16 @@
 {
-    "antigravity_path": "C:\\Users\\maing\\AppData\\Local\\Programs\\Antigravity\\Antigravity.exe",
     "profiles": [
         {
             "id": "profile_01",
             "name": "Tài khoản 01 (Chính)",
-            "email": "thanhthienz22016@gmail.com",
+            "email": "mainguyenz22016@gmail.com",
             "data_dir": "C:\\Users\\maing\\AppData\\Roaming\\Antigravity_Profiles\\profile_01"
         },
         {
             "id": "profile_02",
-            "name": "Tài khoản 02 (Phụ 1)",
-            "email": "mainguyenz22016@gmail.com",
-            "data_dir": "⚪ Chưa đồng bộ"
+            "name": "P2",
+            "email": "thanhthienz22020@gmail.com",
+            "data_dir": "C:\\Users\\maing\\AppData\\Local\\Temp\\tmpazdyv_pi\\AppData\\Roaming\\Antigravity_Profiles\\profile_02"
         },
         {
             "id": "profile_03",
@@ -62,117 +61,116 @@
             "data_dir": "C:\\Users\\maing\\AppData\\Roaming\\Antigravity_Profiles\\profile_10"
         }
     ],
+    "antigravity_path": "C:\\Users\\maing\\AppData\\Local\\Programs\\Antigravity\\Antigravity.exe",
+    "autostart": false,
+    "last_profile_id": "profile_01",
+    "last_project_id": "proj_auto_d7d12f27",
     "projects": [
         {
             "id": "proj_auto_d4067ee0",
             "name": "Docker",
             "path": "C:\\Docker",
-            "conv_count": 93,
+            "conv_count": 279,
             "latest_title": "Check Laptop Internet Connection"
         },
         {
-            "id": "proj_1790097803",
-            "name": "Projects common",
+            "id": "proj_auto_2068b6e1",
+            "name": "Projects",
             "path": "Z:\\home\\thanhthien\\projects",
-            "conv_count": 81,
+            "conv_count": 243,
             "latest_title": "LOTIUS.VN"
         },
         {
             "id": "proj_timioffice",
             "name": "Timioffice",
             "path": "Z:\\home\\thanhthien\\projects\\timioffice",
-            "conv_count": 56,
+            "conv_count": 216,
             "latest_title": "Start DDEV Project"
         },
         {
             "id": "proj_auto_13b611e4",
             "name": "Gecafe",
             "path": "C:\\laragon\\www\\gecafe",
-            "conv_count": 25,
+            "conv_count": 75,
             "latest_title": ""
         },
         {
             "id": "proj_auto_d7d12f27",
             "name": "baogiaTimioffice",
             "path": "C:\\laragon\\www\\baogiaTimioffice",
-            "conv_count": 16,
+            "conv_count": 48,
             "latest_title": ""
         },
         {
             "id": "proj_auto_a6bd0fe8",
             "name": "Ledsunmwnvn.wptangtoc-ols.com01gio_13_03_2026",
             "path": "C:\\Users\\maing\\Downloads\\ledsunmwnvn.wptangtoc-ols.com01gio_13_03_2026",
-            "conv_count": 13,
+            "conv_count": 39,
             "latest_title": ""
         },
         {
             "id": "proj_auto_5d409e03",
             "name": "Nguyenthanhthien",
             "path": "C:\\laragon\\www\\nguyenthanhthien",
-            "conv_count": 7,
+            "conv_count": 21,
             "latest_title": ""
         },
         {
             "id": "proj_auto_149fec3e",
             "name": "Lotius",
             "path": "C:\\laragon\\www\\lotius",
-            "conv_count": 4,
+            "conv_count": 12,
             "latest_title": ""
         },
         {
             "id": "proj_auto_57504a08",
             "name": "Demo-miccreative",
             "path": "C:\\laragon\\www\\demo-miccreative",
-            "conv_count": 2,
+            "conv_count": 6,
             "latest_title": ""
         },
         {
             "id": "proj_auto_fae3996c",
             "name": "Person Brand",
             "path": "C:\\Users\\maing\\Desktop\\F8\\Person Brand",
-            "conv_count": 2,
+            "conv_count": 6,
             "latest_title": ""
         },
         {
             "id": "proj_auto_cc261b57",
             "name": "Happy-birth-day",
             "path": "C:\\Users\\maing\\Desktop\\happy-birth-day",
-            "conv_count": 1,
+            "conv_count": 3,
             "latest_title": ""
         },
         {
             "id": "proj_auto_1eda9ca5",
             "name": "Timioffice",
             "path": "\\\\wsl.localhost\\Ubuntu\\home\\thanhthien\\projects\\timioffice",
-            "conv_count": 1,
+            "conv_count": 3,
             "latest_title": ""
         },
         {
             "id": "proj_auto_ee57e3d3",
             "name": "F8",
             "path": "C:\\Users\\maing\\Desktop\\F8",
-            "conv_count": 1,
+            "conv_count": 3,
             "latest_title": ""
         },
         {
             "id": "proj_auto_7b245cbd",
             "name": "Gecafe",
             "path": "Z:\\home\\thanhthien\\projects\\gecafe",
-            "conv_count": 1,
+            "conv_count": 3,
             "latest_title": "Kiểm Tra Dung Lượng Ổ C"
         },
         {
             "id": "proj_auto_6076d069",
             "name": "Test-zalo",
             "path": "C:\\laragon\\www\\test-zalo",
-            "conv_count": 1,
+            "conv_count": 3,
             "latest_title": ""
         }
     ],
-    "mappings": {
-        "profile_2": "proj_1790097803"
-    },
-    "autostart": false,
-    "last_profile_id": "profile_02",
-    "last_project_id": "proj_auto_d4067ee0"
+    "mappings": {}
 }

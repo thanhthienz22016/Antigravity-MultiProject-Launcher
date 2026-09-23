@@ -1362,8 +1362,42 @@ def kill_process_tree(pid, hwnd=None, extra_pids=None):
 # ---------------------------------------------------------------------------
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Antigravity_Swarm_Manager")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
-LOCAL_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+_base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+LOCAL_CONFIG_FILE = os.path.join(_base_dir, "config.json")
 DESKTOP_CONFIG_FILE = os.path.join(r"C:\Users\maing\Desktop\Antigravity-MultiProject-Launcher", "config.json")
+
+LEGACY_PROFILE_DIRS = {"profile_1", "profile_2", "profile_dev1", "profile_main"}
+
+def get_default_profile_data_dir(profile_id):
+    """Trả về đường dẫn chuẩn tuyệt đối: {APPDATA}\\Antigravity_Profiles\\{profile_id}."""
+    base = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Antigravity_Profiles")
+    return os.path.join(base, profile_id)
+
+def is_valid_profile_data_dir(path_str):
+    """
+    Kiểm tra xem data_dir có phải là đường dẫn hệ thống hợp lệ hay không.
+    Tuyệt đối từ chối chuỗi trạng thái Quota, icon/emoji và chuỗi hiển thị GUI.
+    """
+    if not path_str or not isinstance(path_str, str):
+        return False
+    s = path_str.strip()
+    if not s:
+        return False
+    # Từ chối tất cả các ký tự trạng thái, emoji và chuỗi hiển thị giao diện
+    corrupted_markers = [
+        "⚪", "🟢", "🟡", "🔴", "Chưa đồng bộ", "--%", "Đã đồng bộ",
+        "Quét Quota", "(5h)", "(Tuần)", "Trạng thái", "%"
+    ]
+    if any(marker in s for marker in corrupted_markers):
+        return False
+    # Kiểm tra ký tự cấm trong đường dẫn Windows
+    if any(c in s for c in ['<', '>', '"', '|', '?', '*']):
+        return False
+    # Phải là đường dẫn tuyệt đối (hỗ trợ Windows C:\, UNC \\, Linux /, hoặc biến môi trường)
+    expanded = os.path.expandvars(os.path.expanduser(s))
+    if not (os.path.isabs(expanded) or re.match(r"^[a-zA-Z]:[\\/]", expanded)):
+        return False
+    return True
 
 def get_default_antigravity_path():
     """Tự động tìm kiếm đường dẫn thực thi của Antigravity.exe trong Registry và hệ thống."""
@@ -1410,18 +1444,23 @@ def get_default_antigravity_path():
             return c
     return ""
 
-def load_config():
+def load_config(target_file=None):
     """Đọc cấu hình vĩnh viễn với cơ chế kiểm tra nhiều vị trí và ưu tiên file mới nhất theo mtime."""
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    candidate_files = [CONFIG_FILE, LOCAL_CONFIG_FILE, DESKTOP_CONFIG_FILE]
-    existing_files = [f for f in candidate_files if os.path.isfile(f)]
-    # Sắp xếp file theo modification time giảm dần (mới nhất lên đầu)
-    existing_files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    config_dir = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Antigravity_Swarm_Manager")
+    config_file = os.path.join(config_dir, "config.json")
+    os.makedirs(config_dir, exist_ok=True)
+    if target_file and os.path.isfile(target_file):
+        existing_files = [target_file]
+    else:
+        candidate_files = [config_file, LOCAL_CONFIG_FILE, DESKTOP_CONFIG_FILE]
+        existing_files = [f for f in candidate_files if os.path.isfile(f)]
+        # Sắp xếp file theo modification time giảm dần (mới nhất lên đầu)
+        existing_files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
 
     cfg = None
-    for target_file in existing_files:
+    for fpath in existing_files:
         try:
-            with open(target_file, "r", encoding="utf-8") as fp:
+            with open(fpath, "r", encoding="utf-8") as fp:
                 loaded = json.load(fp)
                 if isinstance(loaded, dict) and loaded:
                     cfg = loaded
@@ -1429,7 +1468,7 @@ def load_config():
         except Exception:
             pass
 
-    default_profiles_base = os.path.join(os.environ.get("APPDATA", ""), "Antigravity_Profiles")
+    default_profiles_base = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Antigravity_Profiles")
     default_profiles = []
     for i in range(1, 11):
         pid = f"profile_{i:02d}"
@@ -1469,13 +1508,21 @@ def load_config():
         raw_existing = cfg.get("profiles", [])
         cleaned_profiles = []
         for p in raw_existing:
+            if not isinstance(p, dict):
+                continue
             pid = p.get("id", "")
             pname = p.get("name", "")
             pdata = p.get("data_dir", "")
             pemail = p.get("email", "")
 
-            # Nhận diện profile mặc định cũ ("Tài khoản Mặc Định" hoặc data_dir trỏ về Antigravity global)
-            if pid in ("prof_default", "profile_default", "default") or "Mặc Định" in pname or (pdata and "Antigravity_Profiles" not in pdata):
+            # Bỏ qua các thư mục / profile legacy mồ côi
+            base_dir_name = os.path.basename(os.path.normpath(str(pdata))).lower() if pdata else ""
+            if str(pid).lower() in LEGACY_PROFILE_DIRS or base_dir_name in LEGACY_PROFILE_DIRS:
+                continue
+
+            # Chỉ nhận diện profile mặc định cũ (prof_default / Mặc Định)
+            is_legacy_default = pid in ("prof_default", "profile_default", "default") or "Mặc Định" in pname
+            if is_legacy_default:
                 target_data = os.path.join(default_profiles_base, "profile_01")
                 cleaned_profiles.append({
                     "id": "profile_01",
@@ -1484,6 +1531,9 @@ def load_config():
                     "data_dir": target_data
                 })
             else:
+                # Tự động khắc phục data_dir nếu bị lỗi / chứa chuỗi hiển thị
+                if not is_valid_profile_data_dir(pdata):
+                    p["data_dir"] = os.path.join(default_profiles_base, pid)
                 cleaned_profiles.append(p)
 
         # Bảo đảm luôn có đủ 10 profile độc lập từ profile_01 đến profile_10
@@ -1501,7 +1551,7 @@ def load_config():
 
             if pid in profile_map:
                 curr = profile_map[pid]
-                if not curr.get("data_dir") or "Antigravity_Profiles" not in curr.get("data_dir", ""):
+                if not is_valid_profile_data_dir(curr.get("data_dir")):
                     curr["data_dir"] = target_dir
                 if i == 1 and ("mainguyenz22016" not in curr.get("email", "")):
                     if not curr.get("email") or "account_" in curr.get("email", ""):
@@ -1531,12 +1581,26 @@ def load_config():
 
 def save_config(cfg):
     """Lưu vĩnh viễn cấu hình vào %APPDATA% và đồng bộ thư mục Desktop/Local."""
+    if not isinstance(cfg, dict):
+        return
+    # [Config Integrity Guard]: Tự động sửa mọi giá trị data_dir bị lỗi trước khi lưu
+    profiles = cfg.get("profiles", [])
+    if isinstance(profiles, list):
+        for idx, p in enumerate(profiles, start=1):
+            if isinstance(p, dict):
+                pid = p.get("id") or f"profile_{idx:02d}"
+                d_dir = p.get("data_dir", "")
+                if not is_valid_profile_data_dir(d_dir):
+                    p["data_dir"] = get_default_profile_data_dir(pid)
+
+    config_dir = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Antigravity_Swarm_Manager")
+    config_file = os.path.join(config_dir, "config.json")
     try:
-        os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        os.makedirs(config_dir, exist_ok=True)
+        with open(config_file, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=4, ensure_ascii=False)
     except Exception as e:
-        print(f"Lỗi lưu config vào {CONFIG_FILE}: {e}")
+        print(f"Lỗi lưu config vào {config_file}: {e}")
 
     for target in [LOCAL_CONFIG_FILE, DESKTOP_CONFIG_FILE]:
         try:
@@ -1569,6 +1633,10 @@ def get_all_antigravity_db_paths():
         if os.path.isdir(profiles_dir):
             try:
                 for p_sub in sorted(os.listdir(profiles_dir)):
+                    if p_sub.lower() in LEGACY_PROFILE_DIRS:
+                        continue
+                    if not re.match(r"^profile_\d+$", p_sub, re.IGNORECASE):
+                        continue
                     cand = os.path.join(profiles_dir, p_sub, "UserProfile", ".gemini", "antigravity", "conversation_summaries.db")
                     candidates.append(cand)
             except Exception:
@@ -1971,9 +2039,21 @@ def fast_seed_profile(profile, force=False):
     4. Phân lập tuyệt đối dữ liệu xác thực (Auth/Tokens/Cookies/Credentials) để các tài khoản Gmail không bao giờ bị logout chéo.
     5. Đánh dấu file .seed_info.json giúp các lần khởi chạy tiếp theo diễn ra tức thì (<2ms).
     """
-    if not profile or not profile.get("data_dir"):
+    if not profile:
         return False
-    
+
+    raw_data_dir = profile.get("data_dir")
+    if "is_valid_profile_data_dir" in globals():
+        if not is_valid_profile_data_dir(raw_data_dir):
+            pid = profile.get("id") or "profile_01"
+            if "get_default_profile_data_dir" in globals():
+                profile["data_dir"] = get_default_profile_data_dir(pid)
+            else:
+                profile["data_dir"] = os.path.join(os.environ.get("APPDATA", ""), "Antigravity_Profiles", pid)
+    elif not raw_data_dir or any(m in str(raw_data_dir) for m in ["⚪", "🟢", "🟡", "🔴", "Chưa đồng bộ"]):
+        pid = profile.get("id") or "profile_01"
+        profile["data_dir"] = os.path.join(os.environ.get("APPDATA", ""), "Antigravity_Profiles", pid)
+
     profile_dir = os.path.abspath(os.path.expandvars(os.path.expanduser(profile["data_dir"])))
     profile_userprofile = os.path.join(profile_dir, "UserProfile")
     ext_dir = os.path.join(profile_dir, "extensions")
@@ -1982,32 +2062,35 @@ def fast_seed_profile(profile, force=False):
     temp_dir = os.path.join(profile_dir, "Temp")
     cache_dir = os.path.join(profile_dir, "Cache")
     gemini_dir = os.path.join(profile_userprofile, ".gemini")
+    gemini_antigravity = os.path.join(gemini_dir, "antigravity")
     antigravity_home = os.path.join(profile_userprofile, ".antigravity")
     antigravity_data = os.path.join(profile_dir, "antigravity_data")
+    target_u_root = os.path.join(profile_dir, "User")
+    target_u_gs = os.path.join(target_u_root, "globalStorage")
     seed_marker = os.path.join(profile_dir, ".seed_info.json")
-    target_conv_db = os.path.join(gemini_dir, "antigravity", "conversation_summaries.db")
-    
+    target_conv_db = os.path.join(gemini_antigravity, "conversation_summaries.db")
+
     # Nếu profile đã được seed hoàn tất và không bắt buộc force, kiểm tra nhanh và trả về trong <1ms
     if not force and os.path.isfile(seed_marker):
-        if os.path.isfile(target_conv_db) and os.path.getsize(target_conv_db) > 0:
-            return True
-    
+        return True
+
     # 1. Tạo các thư mục phân vùng cơ bản (LƯU Ý: Không tạo sẵn ext_dir để Junction tạo thành công)
     for d in [
         profile_dir, profile_userprofile,
         appdata_roaming, appdata_local, temp_dir, cache_dir,
-        gemini_dir, antigravity_home, antigravity_data
+        gemini_dir, gemini_antigravity, antigravity_home, antigravity_data,
+        target_u_root, target_u_gs
     ]:
         try:
             os.makedirs(d, exist_ok=True)
         except Exception:
             pass
-    
+
     sys_userprofile = os.environ.get("USERPROFILE") or os.path.expanduser("~")
     sys_gemini = os.path.join(sys_userprofile, ".gemini")
     sys_appdata = os.environ.get("APPDATA", "")
     sys_localappdata = os.environ.get("LOCALAPPDATA", "")
-    
+
     # 2. Fast-Seed Extensions (NTFS Directory Junction tới thư mục extensions hệ thống)
     src_ext = None
     try:
@@ -2027,7 +2110,7 @@ def fast_seed_profile(profile, force=False):
             if cand and os.path.isdir(cand) and os.listdir(cand):
                 src_ext = cand
                 break
-    
+
     # Nếu ext_dir rỗng hoặc chưa có, ưu tiên liên kết Junction để khởi động trong 1ms
     if src_ext:
         for target_e in [ext_dir, os.path.join(profile_userprofile, ".antigravity", "extensions")]:
@@ -2046,14 +2129,14 @@ def fast_seed_profile(profile, force=False):
                         subprocess.run(f'cmd /c mklink /J "{target_e}" "{src_ext}"', shell=True, capture_output=True)
                     except Exception:
                         pass
-    
+
     # Đảm bảo ext_dir luôn là thư mục hợp lệ (đáp ứng điều kiện kiểm thử)
     if not os.path.exists(ext_dir):
         try:
             os.makedirs(ext_dir, exist_ok=True)
         except Exception:
             pass
-    
+
     # 2b. Fast-Seed Programs từ LocalAppData để tìm thấy binary và runtime tức thì
     if sys_localappdata:
         sys_programs = os.path.join(sys_localappdata, "Programs")
@@ -2064,12 +2147,12 @@ def fast_seed_profile(profile, force=False):
                 _winapi.CreateJunction(sys_programs, target_programs)
             except Exception:
                 pass
-    
+
     # 3. Fast-Seed Gemini Runtime & Đồng bộ Conversation Summaries & Brain Context
-    target_antigravity = os.path.join(gemini_dir, "antigravity")
+    target_antigravity = gemini_antigravity
     os.makedirs(target_antigravity, exist_ok=True)
     is_primary = (profile.get("id") == "profile_01") or ("mainguyenz22016@gmail.com" in profile.get("email", ""))
-    
+
     # Đồng bộ cấu trúc brain (Junction hoặc sao chép nhanh context)
     src_brain = os.path.join(sys_gemini, "antigravity", "brain")
     dst_brain = os.path.join(target_antigravity, "brain")
@@ -2112,7 +2195,7 @@ def fast_seed_profile(profile, force=False):
                                         pass
                 except Exception:
                     pass
-    
+
     # Đồng bộ SQLite conversation_summaries.db
     master_db = ""
     # Ưu tiên database hệ thống chính
@@ -2132,38 +2215,55 @@ def fast_seed_profile(profile, force=False):
                 master_db = cand
         except Exception:
             pass
+
     if master_db and os.path.isfile(master_db) and os.path.abspath(master_db) != os.path.abspath(target_conv_db):
         try:
             import sqlite3
+            from pathlib import Path
             os.makedirs(os.path.dirname(target_conv_db), exist_ok=True)
+            master_uri = Path(os.path.abspath(master_db)).as_uri() + "?mode=ro"
+
             if not os.path.isfile(target_conv_db) or os.path.getsize(target_conv_db) == 0:
                 s_conn = None
                 d_conn = None
+                backup_ok = False
                 try:
-                    s_conn = sqlite3.connect(f"file:{os.path.abspath(master_db)}?mode=ro", uri=True, timeout=2.0)
+                    s_conn = sqlite3.connect(master_uri, uri=True, timeout=2.0)
                     d_conn = sqlite3.connect(target_conv_db, timeout=2.0)
                     s_conn.backup(d_conn)
+                    backup_ok = True
                 except Exception:
-                    shutil.copy2(master_db, target_conv_db)
-                    for sfx in ["-wal", "-shm"]:
-                        s_wal = master_db + sfx
-                        if os.path.isfile(s_wal):
-                            try:
-                                shutil.copy2(s_wal, target_conv_db + sfx)
-                            except Exception:
-                                pass
+                    backup_ok = False
                 finally:
                     if d_conn:
                         try: d_conn.close()
                         except Exception: pass
+                        d_conn = None
                     if s_conn:
                         try: s_conn.close()
                         except Exception: pass
+                        s_conn = None
+
+                # Fallback copy chỉ thực hiện khi connections đã chắc chắn đóng hoàn toàn!
+                if not backup_ok:
+                    try:
+                        shutil.copy2(master_db, target_conv_db)
+                        for sfx in ["-wal", "-shm"]:
+                            s_wal = master_db + sfx
+                            if os.path.isfile(s_wal):
+                                try:
+                                    shutil.copy2(s_wal, target_conv_db + sfx)
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
             else:
                 s_conn = None
                 d_conn = None
+                s_cur = None
+                d_cur = None
                 try:
-                    s_conn = sqlite3.connect(f"file:{os.path.abspath(master_db)}?mode=ro", uri=True, timeout=2.0)
+                    s_conn = sqlite3.connect(master_uri, uri=True, timeout=2.0)
                     d_conn = sqlite3.connect(target_conv_db, timeout=2.0)
                     s_cur = s_conn.cursor()
                     d_cur = d_conn.cursor()
@@ -2184,6 +2284,10 @@ def fast_seed_profile(profile, force=False):
                 except Exception:
                     pass
                 finally:
+                    for c in (s_cur, d_cur):
+                        if c:
+                            try: c.close()
+                            except Exception: pass
                     if d_conn:
                         try: d_conn.close()
                         except Exception: pass
@@ -2192,7 +2296,7 @@ def fast_seed_profile(profile, force=False):
                         except Exception: pass
         except Exception as e:
             print(f"Lưu ý: Lỗi đồng bộ conversation DB: {e}")
-    
+
     # Đảm bảo database có mặt tại cả antigravity_home và antigravity_data
     if os.path.isfile(target_conv_db):
         for extra_dir in [antigravity_home, antigravity_data]:
@@ -2206,7 +2310,7 @@ def fast_seed_profile(profile, force=False):
                         shutil.copy2(target_conv_db, extra_db)
                 except Exception:
                     pass
-    
+
     # Bảo vệ và phân lập dữ liệu đăng nhập:
     if is_primary:
         for auth_f in ["token.json", "oauth.json", "credentials.json"]:
@@ -2230,7 +2334,7 @@ def fast_seed_profile(profile, force=False):
                             os.remove(d_auth)
                 except Exception:
                     pass
-    
+
     # 4. Fast-Seed VS Code User Settings, Storage & Core Runtime State
     cand_user_dirs = [
         os.path.join(sys_appdata, "Antigravity", "User") if sys_appdata else "",
@@ -2272,20 +2376,45 @@ def fast_seed_profile(profile, force=False):
                                     pass
                     except Exception:
                         pass
+            # Fallback synthetic User/storage.json if still missing
+            u_storage = os.path.join(target_u, "storage.json")
+            if not os.path.isfile(u_storage):
+                try:
+                    with open(u_storage, "w", encoding="utf-8") as sf:
+                        json.dump({
+                            "telemetry.machineId": "0000000000000000000000000000000000000000000000000000000000000000",
+                            "theme": "vs-dark"
+                        }, sf, indent=2)
+                except Exception:
+                    pass
         except Exception:
             pass
-    
+
     # Seed root storage.json để loại bỏ màn hình first-run
-    if sys_appdata:
-        s_root_st = os.path.join(sys_appdata, "Antigravity", "storage.json")
-        for target_root in [profile_dir, os.path.join(appdata_roaming, "Antigravity")]:
-            d_root_st = os.path.join(target_root, "storage.json")
-            if os.path.isfile(s_root_st) and not os.path.isfile(d_root_st):
+    s_root_st = os.path.join(sys_appdata, "Antigravity", "storage.json") if sys_appdata else ""
+    for target_root in [profile_dir, os.path.join(appdata_roaming, "Antigravity")]:
+        d_root_st = os.path.join(target_root, "storage.json")
+        try:
+            os.makedirs(target_root, exist_ok=True)
+            if s_root_st and os.path.isfile(s_root_st) and not os.path.isfile(d_root_st):
                 try:
                     shutil.copy2(s_root_st, d_root_st)
                 except Exception:
                     pass
-    
+            # Fallback synthetic root storage.json if still missing
+            if not os.path.isfile(d_root_st):
+                try:
+                    with open(d_root_st, "w", encoding="utf-8") as sf:
+                        json.dump({
+                            "profileAssociations": {"workspaces": {}},
+                            "telemetry.firstSessionDate": time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime()),
+                            "telemetry.lastSessionDate": time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
+                        }, sf, indent=2)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     # 5. Đồng bộ .gitconfig
     gitconfig_src = os.path.join(sys_userprofile, ".gitconfig")
     gitconfig_dst = os.path.join(profile_userprofile, ".gitconfig")
@@ -2294,7 +2423,7 @@ def fast_seed_profile(profile, force=False):
             shutil.copy2(gitconfig_src, gitconfig_dst)
         except Exception:
             pass
-    
+
     # 6. Ghi dấu .seed_info.json
     try:
         with open(seed_marker, "w", encoding="utf-8") as f:
@@ -2306,7 +2435,7 @@ def fast_seed_profile(profile, force=False):
             }, f, indent=2)
     except Exception:
         pass
-    
+
     return True
 
 
@@ -2344,6 +2473,8 @@ class SwarmManagerApp(tk.Tk):
         self.config_data = load_config()
         self.running_instances = [] # list of dicts: pid, proc, profile, project, start_time, hwnd, hook_thread
         self.quota_cache = {}
+        self._last_launch_time = 0.0
+        self._launch_lock = threading.Lock()
 
         # Nạp trước thông số Quota đã lưu trên đĩa cho từng Profile
         for p in self.config_data.get("profiles", []):
@@ -3001,17 +3132,25 @@ class SwarmManagerApp(tk.Tk):
         Bảo toàn các Profile hiện có, bổ sung thêm các Profile còn thiếu.
         """
         raw_existing = self.config_data.get("profiles", [])
-        default_base = os.path.join(os.environ.get("APPDATA", ""), "Antigravity_Profiles")
+        default_base = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Antigravity_Profiles")
 
         cleaned_profiles = []
         for p in raw_existing:
+            if not isinstance(p, dict):
+                continue
             pid = p.get("id", "")
             pname = p.get("name", "")
             pdata = p.get("data_dir", "")
             pemail = p.get("email", "")
 
-            # Nhận diện profile mặc định cũ ("Tài khoản Mặc Định" hoặc data_dir trỏ về Antigravity global)
-            if pid in ("prof_default", "profile_default", "default") or "Mặc Định" in pname or (pdata and "Antigravity_Profiles" not in pdata):
+            # Bỏ qua các thư mục / profile legacy mồ côi
+            base_dir_name = os.path.basename(os.path.normpath(str(pdata))).lower() if pdata else ""
+            if str(pid).lower() in LEGACY_PROFILE_DIRS or base_dir_name in LEGACY_PROFILE_DIRS:
+                continue
+
+            # Chỉ nhận diện profile mặc định cũ (prof_default / Mặc Định)
+            is_legacy_default = pid in ("prof_default", "profile_default", "default") or "Mặc Định" in pname
+            if is_legacy_default:
                 target_data = os.path.join(default_base, "profile_01")
                 cleaned_profiles.append({
                     "id": "profile_01",
@@ -3020,6 +3159,9 @@ class SwarmManagerApp(tk.Tk):
                     "data_dir": target_data
                 })
             else:
+                # Tự động khắc phục data_dir nếu bị lỗi / chứa chuỗi hiển thị
+                if not is_valid_profile_data_dir(pdata):
+                    p["data_dir"] = os.path.join(default_base, pid)
                 cleaned_profiles.append(p)
 
         profile_map = {}
@@ -3037,7 +3179,7 @@ class SwarmManagerApp(tk.Tk):
 
             if pid in profile_map:
                 curr = profile_map[pid]
-                if not curr.get("data_dir") or "Antigravity_Profiles" not in curr.get("data_dir", ""):
+                if not is_valid_profile_data_dir(curr.get("data_dir")):
                     curr["data_dir"] = target_dir
                 if i == 1 and ("mainguyenz22016" not in curr.get("email", "")):
                     if not curr.get("email") or "account_" in curr.get("email", ""):
@@ -3297,10 +3439,17 @@ class SwarmManagerApp(tk.Tk):
             return
         item_vals = self.profiles_tree.item(selected[0], "values")
         data_dir_val = item_vals[5] if len(item_vals) > 5 else item_vals[3]
+        p_id = item_vals[0] if len(item_vals) > 0 else ""
+        if not is_valid_profile_data_dir(data_dir_val):
+            orig = next((p for p in self.config_data.get("profiles", []) if p.get("id") == p_id), None)
+            if orig and is_valid_profile_data_dir(orig.get("data_dir")):
+                data_dir_val = orig["data_dir"]
+            else:
+                data_dir_val = get_default_profile_data_dir(p_id) if p_id else ""
         profile_data = {
-            "id": item_vals[0],
-            "name": item_vals[1],
-            "email": item_vals[2],
+            "id": p_id,
+            "name": item_vals[1] if len(item_vals) > 1 else "",
+            "email": item_vals[2] if len(item_vals) > 2 else "",
             "data_dir": data_dir_val
         }
         self._show_profile_dialog(mode="edit", initial_data=profile_data)
@@ -3346,7 +3495,7 @@ class SwarmManagerApp(tk.Tk):
             count = len(self.config_data.get("profiles", [])) + 1
             name_ent.insert(0, f"Gmail Dev {count}")
             email_ent.insert(0, f"account{count}@gmail.com")
-            def_base = os.path.join(os.environ.get("APPDATA", ""), "Antigravity_Profiles", f"profile_dev{count}")
+            def_base = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Antigravity_Profiles", f"profile_{count:02d}")
             dir_ent.insert(0, def_base)
 
         def save_profile():
@@ -3357,8 +3506,12 @@ class SwarmManagerApp(tk.Tk):
             if not name:
                 messagebox.showerror("Lỗi", "Tên Profile không được để trống.")
                 return
-            if not data_dir:
-                messagebox.showerror("Lỗi", "Thư mục Profile không được để trống.")
+            if not data_dir or not is_valid_profile_data_dir(data_dir):
+                messagebox.showerror(
+                    "Lỗi",
+                    "Đường dẫn Thư mục Profile không hợp lệ hoặc chứa chuỗi trạng thái Quota.\n"
+                    "Vui lòng nhập đường dẫn thư mục thực tế."
+                )
                 return
 
             if mode == "add":
@@ -3412,6 +3565,13 @@ class SwarmManagerApp(tk.Tk):
             return
         item_vals = self.profiles_tree.item(selected[0], "values")
         data_dir_val = item_vals[5] if len(item_vals) > 5 else item_vals[3]
+        p_id = item_vals[0] if len(item_vals) > 0 else ""
+        if not is_valid_profile_data_dir(data_dir_val):
+            orig = next((p for p in self.config_data.get("profiles", []) if p.get("id") == p_id), None)
+            if orig and is_valid_profile_data_dir(orig.get("data_dir")):
+                data_dir_val = orig["data_dir"]
+            else:
+                data_dir_val = get_default_profile_data_dir(p_id) if p_id else ""
         p_dir = os.path.abspath(os.path.expandvars(os.path.expanduser(data_dir_val)))
         if not os.path.exists(p_dir):
             try:
@@ -3617,6 +3777,15 @@ class SwarmManagerApp(tk.Tk):
             messagebox.showerror("Lỗi", "Đường dẫn Antigravity.exe không hợp lệ hoặc chưa được chọn.")
             return False
 
+        # [Anti-Ban Safety]: Giãn cách khởi chạy tối thiểu 3.0 giây giữa các profile
+        MIN_LAUNCH_INTERVAL = 3.0
+        with getattr(self, "_launch_lock", threading.Lock()):
+            now = time.time()
+            elapsed = now - getattr(self, "_last_launch_time", 0.0)
+            if elapsed < MIN_LAUNCH_INTERVAL and getattr(self, "_last_launch_time", 0.0) > 0:
+                time.sleep(MIN_LAUNCH_INTERVAL - elapsed)
+            self._last_launch_time = time.time()
+
         profile_dir = os.path.abspath(os.path.expandvars(os.path.expanduser(profile["data_dir"])))
         proj_path = os.path.abspath(os.path.expandvars(os.path.expanduser(project["path"]))) if (project and project.get("path")) else ""
 
@@ -3699,7 +3868,7 @@ class SwarmManagerApp(tk.Tk):
 
             # [P0 - Win32 Title Hook]: Luồng đổi tiêu đề cửa sổ trong background
             tag_label = profile.get("email") or profile.get("name")
-            hook = WindowTitleHook(proc.pid, tag_label, project["name"], instance_info)
+            hook = WindowTitleHook(proc.pid, tag_label, project.get("name", "") if project else "", instance_info)
             hook.start()
             instance_info["hook_thread"] = hook
 
@@ -4037,14 +4206,34 @@ class SwarmManagerApp(tk.Tk):
             else:
                 to_launch.append((prof, proj))
 
-        success_count = 0
         if to_launch:
             if not self._check_conflicts_and_warn(to_launch):
                 return
-            for prof, proj in to_launch:
-                if self._execute_launch(prof, proj):
-                    success_count += 1
-                    time.sleep(0.8)
+
+            def _batch_launch_worker():
+                success_count = 0
+                for prof, proj in to_launch:
+                    if self._execute_launch(prof, proj):
+                        success_count += 1
+                        time.sleep(3.0)  # Antigravity Swarm Anti-Ban Safety: Stagger launches by >= 3 seconds
+
+                def _finish_ui():
+                    self._refresh_comboboxes()
+                    self._refresh_matrix_table()
+                    summary_msg = []
+                    if focused_count > 0:
+                        summary_msg.append(f"• 🎯 Đã kích hoạt (Focus) {focused_count} cửa sổ Antigravity đang hoạt động.")
+                    if success_count > 0:
+                        summary_msg.append(f"• 🚀 Đã khởi chạy mới {success_count} cửa sổ Antigravity độc lập.")
+                    if not summary_msg:
+                        summary_msg.append("Không có cửa sổ nào cần xử lý.")
+                    messagebox.showinfo("Hoàn Tất Swarm Matrix", "\n".join(summary_msg))
+                    self.notebook.select(self.tab_monitor)
+
+                self.after(0, _finish_ui)
+
+            threading.Thread(target=_batch_launch_worker, daemon=True).start()
+            return
 
         self._refresh_comboboxes()
         self._refresh_matrix_table()
@@ -4052,8 +4241,6 @@ class SwarmManagerApp(tk.Tk):
         summary_msg = []
         if focused_count > 0:
             summary_msg.append(f"• 🎯 Đã kích hoạt (Focus) {focused_count} cửa sổ Antigravity đang hoạt động.")
-        if success_count > 0:
-            summary_msg.append(f"• 🚀 Đã khởi chạy mới {success_count} cửa sổ Antigravity độc lập.")
         if not summary_msg:
             summary_msg.append("Không có cửa sổ nào cần xử lý.")
 

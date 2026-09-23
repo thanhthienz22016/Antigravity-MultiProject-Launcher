@@ -9,6 +9,8 @@ import ast
 import json
 import os
 import re
+import shutil
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -310,6 +312,27 @@ class TestWebSocketEngine(unittest.TestCase):
 class TestProfileOptimizationAndSync(unittest.TestCase):
     """Test fast profile seeding, conversation sync, and auth isolation."""
 
+    @staticmethod
+    def _extract_top_level_func(code, func_name):
+        """Extract a top-level function definition from source code, handling blank lines."""
+        lines = code.split('\n')
+        start = None
+        for i, line in enumerate(lines):
+            if line.startswith(f'def {func_name}(') or line.startswith(f'def {func_name} ('):
+                start = i
+                break
+        if start is None:
+            return None
+        # Collect all lines belonging to this function (indented or blank until next top-level def/class)
+        end = start + 1
+        while end < len(lines):
+            line = lines[end]
+            # A non-empty, non-indented line that's not a comment = end of function
+            if line and not line[0].isspace() and not line.startswith('#'):
+                break
+            end += 1
+        return '\n'.join(lines[start:end])
+
     def setUp(self):
         with open(SWARM_SCRIPT, "r", encoding="utf-8") as f:
             code = f.read()
@@ -318,23 +341,48 @@ class TestProfileOptimizationAndSync(unittest.TestCase):
             "os": os,
             "sys": sys,
             "json": json,
+            "re": re,
             "time": __import__("time"),
             "shutil": __import__("shutil"),
             "glob": __import__("glob"),
             "subprocess": __import__("subprocess"),
+            "Path": __import__("pathlib").Path,
+            "LEGACY_PROFILE_DIRS": {"profile_1", "profile_2", "profile_dev1", "profile_main"},
+            "get_default_antigravity_path": lambda: "",
+            "LOCAL_CONFIG_FILE": os.path.join(SCRIPT_DIR, "config.json"),
+            "DESKTOP_CONFIG_FILE": os.path.join(r"C:\Users\maing\Desktop\Antigravity-MultiProject-Launcher", "config.json"),
+            "CONFIG_DIR": os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Antigravity_Swarm_Manager"),
+            "CONFIG_FILE": os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Antigravity_Swarm_Manager", "config.json"),
         }
-        match1 = re.search(r"def is_auth_or_transient_file\(.*?\):\n(?:    .*\n)+", code)
-        self.assertIsNotNone(match1)
-        exec(match1.group(0), helper_globals)
 
-        match2 = re.search(r"def fast_seed_profile\(.*?\):\n(?:    .*\n)+", code)
-        self.assertIsNotNone(match2)
-        exec(match2.group(0), helper_globals)
+        # Extract functions using robust line-based extractor
+        func_names = [
+            "get_default_profile_data_dir",
+            "is_valid_profile_data_dir",
+            "is_auth_or_transient_file",
+            "save_config",
+            "load_config",
+            "get_all_antigravity_db_paths",
+            "fast_seed_profile",
+        ]
+        for fn in func_names:
+            src = self._extract_top_level_func(code, fn)
+            if src:
+                exec(src, helper_globals)
+
+        # These MUST be present
+        self.assertIn("is_auth_or_transient_file", helper_globals)
+        self.assertIn("fast_seed_profile", helper_globals)
 
         helper_globals["get_antigravity_db_path"] = lambda: ""
 
         self.is_auth_or_transient_file = helper_globals["is_auth_or_transient_file"]
         self.fast_seed_profile = helper_globals["fast_seed_profile"]
+        self.is_valid_profile_data_dir = helper_globals.get("is_valid_profile_data_dir")
+        self.get_default_profile_data_dir = helper_globals.get("get_default_profile_data_dir")
+        self.load_config = helper_globals.get("load_config")
+        self.save_config = helper_globals.get("save_config")
+        self.get_all_antigravity_db_paths = helper_globals.get("get_all_antigravity_db_paths")
 
     def test_10_is_auth_or_transient_file(self):
         """Test detection of auth, token, cookie, and lock files for isolation."""
@@ -528,6 +576,289 @@ class TestProfileOptimizationAndSync(unittest.TestCase):
                     os.environ["APPDATA"] = old_appdata
                 else:
                     os.environ.pop("APPDATA", None)
+
+    def test_16_config_autofix_corrupted_data_dir(self):
+        """Ensure load_config auto-repairs corrupted data_dir values (e.g. '⚪ Chưa đồng bộ', badges, empty)."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            appdata = os.path.join(tmp_dir, "AppData", "Roaming")
+            os.makedirs(appdata, exist_ok=True)
+            cfg_dir = os.path.join(appdata, "Antigravity_Swarm_Manager")
+            os.makedirs(cfg_dir, exist_ok=True)
+            cfg_file = os.path.join(cfg_dir, "config.json")
+
+            corrupted_config = {
+                "antigravity_path": "",
+                "profiles": [
+                    {"id": "profile_01", "name": "Profile 1", "email": "dev1@gmail.com", "data_dir": "⚪ Chưa đồng bộ"},
+                    {"id": "profile_02", "name": "Profile 2", "email": "dev2.antigravity@gmail.com", "data_dir": "⚪ Chưa đồng bộ"},
+                    {"id": "profile_03", "name": "Profile 3", "email": "dev3@gmail.com", "data_dir": "🔴 3% (5h) / 🟢 68% (Tuần)"},
+                    {"id": "profile_04", "name": "Profile 4", "email": "dev4@gmail.com", "data_dir": ""},
+                    {"id": "profile_05", "name": "Profile 5", "email": "dev5@gmail.com", "data_dir": None},
+                    {"id": "profile_06", "name": "Profile 6", "email": "dev6@gmail.com", "data_dir": "relative/path/profile_06"},
+                ]
+            }
+            with open(cfg_file, "w", encoding="utf-8") as f:
+                json.dump(corrupted_config, f)
+
+            old_appdata = os.environ.get("APPDATA")
+            os.environ["APPDATA"] = appdata
+            try:
+                cfg = self.load_config(target_file=cfg_file)
+                profiles = cfg.get("profiles", [])
+                self.assertEqual(len(profiles), 10)
+
+                # Check profile_02 preserved email and name
+                p2 = next((p for p in profiles if p["id"] == "profile_02"), None)
+                self.assertIsNotNone(p2)
+                self.assertEqual(p2["email"], "dev2.antigravity@gmail.com")
+                self.assertEqual(p2["name"], "Profile 2")
+
+                for p in profiles:
+                    data_dir = p.get("data_dir", "")
+                    pid = p["id"]
+                    self.assertIsInstance(data_dir, str)
+                    self.assertTrue(len(data_dir) > 5)
+                    self.assertNotIn("⚪", data_dir)
+                    self.assertNotIn("Chưa đồng bộ", data_dir)
+                    self.assertNotIn("🔴", data_dir)
+                    self.assertNotIn("%", data_dir)
+                    self.assertTrue(data_dir.endswith(pid) or "Antigravity_Profiles" in data_dir)
+            finally:
+                if old_appdata is not None:
+                    os.environ["APPDATA"] = old_appdata
+                else:
+                    os.environ.pop("APPDATA", None)
+
+    def test_17_profile_save_never_writes_display_strings(self):
+        """Ensure save_config sanitizes profile data_dir and rejects quota display strings."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            appdata = os.path.join(tmp_dir, "AppData", "Roaming")
+            cfg_dir = os.path.join(appdata, "Antigravity_Swarm_Manager")
+            os.makedirs(cfg_dir, exist_ok=True)
+            cfg_file = os.path.join(cfg_dir, "config.json")
+
+            old_appdata = os.environ.get("APPDATA")
+            os.environ["APPDATA"] = appdata
+            try:
+                dirty_config = {
+                    "profiles": [
+                        {"id": "profile_02", "name": "P2", "email": "p2@gmail.com", "data_dir": "⚪ Chưa đồng bộ"},
+                        {"id": "profile_03", "name": "P3", "email": "p3@gmail.com", "data_dir": "🟢 90% (5h)"},
+                    ]
+                }
+                self.save_config(dirty_config)
+                with open(cfg_file, "r", encoding="utf-8") as f:
+                    saved = json.load(f)
+
+                saved_p2 = saved["profiles"][0]
+                self.assertNotEqual(saved_p2["data_dir"], "⚪ Chưa đồng bộ")
+                self.assertNotIn("Chưa đồng bộ", saved_p2["data_dir"])
+                self.assertTrue(saved_p2["data_dir"].endswith("profile_02"))
+
+                saved_p3 = saved["profiles"][1]
+                self.assertNotIn("🟢", saved_p3["data_dir"])
+                self.assertTrue(saved_p3["data_dir"].endswith("profile_03"))
+            finally:
+                if old_appdata is not None:
+                    os.environ["APPDATA"] = old_appdata
+                else:
+                    os.environ.pop("APPDATA", None)
+
+    def test_18_fast_seed_complete_directory_structure(self):
+        """Verify complete directory hierarchy: UserProfile, extensions, Temp, Cache, antigravity_data, .gemini."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            prof_data_dir = os.path.join(tmp_dir, "profiles", "profile_04")
+            profile = {
+                "id": "profile_04",
+                "name": "Tài khoản 04",
+                "email": "dev4@gmail.com",
+                "data_dir": prof_data_dir
+            }
+            ok = self.fast_seed_profile(profile, force=True)
+            self.assertTrue(ok)
+
+            expected_dirs = [
+                prof_data_dir,
+                os.path.join(prof_data_dir, "UserProfile"),
+                os.path.join(prof_data_dir, "UserProfile", "AppData", "Roaming"),
+                os.path.join(prof_data_dir, "UserProfile", "AppData", "Local"),
+                os.path.join(prof_data_dir, "UserProfile", ".gemini", "antigravity"),
+                os.path.join(prof_data_dir, "UserProfile", ".antigravity"),
+                os.path.join(prof_data_dir, "extensions"),
+                os.path.join(prof_data_dir, "Temp"),
+                os.path.join(prof_data_dir, "Cache"),
+                os.path.join(prof_data_dir, "antigravity_data"),
+                os.path.join(prof_data_dir, "User"),
+                os.path.join(prof_data_dir, "User", "globalStorage"),
+            ]
+            for d in expected_dirs:
+                self.assertTrue(os.path.isdir(d), f"Missing required directory: {d}")
+            self.assertTrue(os.path.isfile(os.path.join(prof_data_dir, ".seed_info.json")))
+
+    def test_19_fast_seed_idempotency_fast_path(self):
+        """Verify fast path returns in <50ms even when called repeatedly without master DB."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            prof_data_dir = os.path.join(tmp_dir, "profiles", "profile_05")
+            profile = {"id": "profile_05", "name": "P5", "email": "p5@gmail.com", "data_dir": prof_data_dir}
+
+            self.fast_seed_profile(profile, force=True)
+
+            # Test 10 successive fast path calls with force=False
+            t0 = __import__("time").time()
+            for _ in range(10):
+                res = self.fast_seed_profile(profile, force=False)
+                self.assertTrue(res)
+            total_duration = __import__("time").time() - t0
+
+            # 10 iterations must complete in under 50ms total (<5ms per call)
+            self.assertLess(total_duration, 0.05, f"Idempotency too slow: {total_duration*1000:.2f}ms")
+
+    def test_20_fast_seed_fallback_storage_json(self):
+        """Verify synthetic storage.json and User/storage.json are created when host files do not exist."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            sys_user = os.path.join(tmp_dir, "sys_empty_user")
+            sys_appdata = os.path.join(tmp_dir, "sys_empty_appdata")
+            os.makedirs(sys_user, exist_ok=True)
+            os.makedirs(sys_appdata, exist_ok=True)
+
+            old_userprofile = os.environ.get("USERPROFILE")
+            old_appdata = os.environ.get("APPDATA")
+            os.environ["USERPROFILE"] = sys_user
+            os.environ["APPDATA"] = sys_appdata
+
+            try:
+                prof_data_dir = os.path.join(tmp_dir, "profiles", "profile_06")
+                profile = {"id": "profile_06", "name": "P6", "email": "dev6@gmail.com", "data_dir": prof_data_dir}
+
+                ok = self.fast_seed_profile(profile, force=True)
+                self.assertTrue(ok)
+
+                # Verify root storage.json exists and has valid JSON
+                root_storage = os.path.join(prof_data_dir, "storage.json")
+                self.assertTrue(os.path.isfile(root_storage), "Synthetic root storage.json must exist")
+                with open(root_storage, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                self.assertIn("telemetry.firstSessionDate", data)
+
+                # Verify User/storage.json exists and has valid JSON
+                user_storage = os.path.join(prof_data_dir, "User", "storage.json")
+                self.assertTrue(os.path.isfile(user_storage), "Synthetic User/storage.json must exist")
+                with open(user_storage, "r", encoding="utf-8") as f:
+                    udata = json.load(f)
+                self.assertIn("telemetry.machineId", udata)
+            finally:
+                if old_userprofile is not None:
+                    os.environ["USERPROFILE"] = old_userprofile
+                else:
+                    os.environ.pop("USERPROFILE", None)
+                if old_appdata is not None:
+                    os.environ["APPDATA"] = old_appdata
+                else:
+                    os.environ.pop("APPDATA", None)
+
+    def test_21_legacy_profile_directories_ignored(self):
+        """Ensure legacy directories (Profile_1, Profile_2, profile_dev1, profile_main) are skipped."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            appdata = os.path.join(tmp_dir, "AppData", "Roaming")
+            prof_base = os.path.join(appdata, "Antigravity_Profiles")
+
+            legacy_names = ["Profile_1", "Profile_2", "profile_dev1", "profile_main"]
+            for leg in legacy_names:
+                leg_db_dir = os.path.join(prof_base, leg, "UserProfile", ".gemini", "antigravity")
+                os.makedirs(leg_db_dir, exist_ok=True)
+                with open(os.path.join(leg_db_dir, "conversation_summaries.db"), "w") as f:
+                    f.write("legacy_db_content")
+
+            # Valid standard profile
+            valid_db_dir = os.path.join(prof_base, "profile_01", "UserProfile", ".gemini", "antigravity")
+            os.makedirs(valid_db_dir, exist_ok=True)
+            with open(os.path.join(valid_db_dir, "conversation_summaries.db"), "w") as f:
+                f.write("valid_db_content")
+
+            old_appdata = os.environ.get("APPDATA")
+            os.environ["APPDATA"] = appdata
+            try:
+                paths = self.get_all_antigravity_db_paths()
+                for p in paths:
+                    for leg in legacy_names:
+                        self.assertNotIn(os.sep + leg + os.sep, p, f"Legacy dir leaked into DB search: {p}")
+                self.assertTrue(any("profile_01" in p for p in paths), "Valid profile_01 DB should be discovered")
+            finally:
+                if old_appdata:
+                    os.environ["APPDATA"] = old_appdata
+                else:
+                    os.environ.pop("APPDATA", None)
+
+    def test_22_sqlite_explicit_close_no_winerror32(self):
+        """Verify SQLite connections and cursors are explicitly closed, preventing WinError 32."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            master_db = os.path.join(tmp_dir, "master_conv.db")
+            import sqlite3
+            m_conn = sqlite3.connect(master_db)
+            m_cur = m_conn.cursor()
+            m_cur.execute("CREATE TABLE conversation_summaries (id TEXT PRIMARY KEY, title TEXT)")
+            m_cur.execute("INSERT INTO conversation_summaries VALUES ('c1', 'Test')")
+            m_conn.commit()
+            m_cur.close()
+            m_conn.close()
+
+            prof_dir = os.path.join(tmp_dir, "profile_test")
+            prof_gemini = os.path.join(prof_dir, "UserProfile", ".gemini", "antigravity")
+            os.makedirs(prof_gemini, exist_ok=True)
+            target_db = os.path.join(prof_gemini, "conversation_summaries.db")
+
+            profile = {"id": "profile_02", "name": "P2", "email": "p2@gmail.com", "data_dir": prof_dir}
+
+            sys_user = os.path.join(tmp_dir, "sys_user")
+            sys_g = os.path.join(sys_user, ".gemini", "antigravity")
+            os.makedirs(sys_g, exist_ok=True)
+            shutil.copy2(master_db, os.path.join(sys_g, "conversation_summaries.db"))
+
+            old_user = os.environ.get("USERPROFILE")
+            os.environ["USERPROFILE"] = sys_user
+            try:
+                ok = self.fast_seed_profile(profile, force=True)
+                self.assertTrue(ok)
+
+                # Verify target db is not locked: we should be able to open, write and remove it immediately
+                if os.path.isfile(target_db):
+                    with open(target_db, "a+b") as f:
+                        f.write(b"lock_check")
+                    os.remove(target_db)
+            finally:
+                if old_user:
+                    os.environ["USERPROFILE"] = old_user
+                else:
+                    os.environ.pop("USERPROFILE", None)
+
+    def test_23_launch_stagger_minimum_interval(self):
+        """Verify >=3.0s delay in batch launch loop, complete env isolation, and no direct Google API calls."""
+        with open(SWARM_SCRIPT, "r", encoding="utf-8") as f:
+            code = f.read()
+
+        # 1. Staggered launch delay check: verify >= 3s in batch launch loop
+        launch_delay_match = re.search(r"for prof, proj in to_launch:[\s\S]*?time\.sleep\((\d+(?:\.\d+)?)\)", code)
+        self.assertIsNotNone(launch_delay_match, "Launch delay time.sleep not found in batch launch loop")
+        delay_val = float(launch_delay_match.group(1))
+        self.assertGreaterEqual(delay_val, 3.0, f"Staggered launch delay {delay_val}s is less than required 3.0s!")
+
+        # 2. Environment isolation keys check
+        required_env_keys = [
+            'custom_env["USERPROFILE"]',
+            'custom_env["APPDATA"]',
+            'custom_env["LOCALAPPDATA"]',
+            'custom_env["TEMP"]',
+            'custom_env["TMP"]',
+            'custom_env["GEMINI_HOME"]',
+            'custom_env["ANTIGRAVITY_DATA_DIR"]'
+        ]
+        for key in required_env_keys:
+            self.assertIn(key, code, f"Missing isolated environment variable assignment: {key}")
+
+        # 3. Verify zero direct Google API network endpoints in code
+        google_api_patterns = ["accounts.google.com/o/oauth2", "googleapis.com/oauth2", "oauth2.googleapis.com"]
+        for g_api in google_api_patterns:
+            self.assertNotIn(g_api, code, f"Forbidden direct Google API call detected: {g_api}")
 
 
 def run_tests():
