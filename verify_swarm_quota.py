@@ -56,6 +56,10 @@ class TestSwarmCodeStructure(unittest.TestCase):
             "_start_quota_monitor_timer",
             "keybd_event",
             "VK_MENU",
+            "find_system_extensions_dir",
+            "fast_seed_profile",
+            "is_auth_or_transient_file",
+            "get_all_antigravity_db_paths",
         ]
         for sym in required_symbols:
             self.assertIn(sym, code, f"Required symbol '{sym}' missing from codebase")
@@ -303,6 +307,229 @@ class TestWebSocketEngine(unittest.TestCase):
         self.assertGreaterEqual(call_count[0], 3)
 
 
+class TestProfileOptimizationAndSync(unittest.TestCase):
+    """Test fast profile seeding, conversation sync, and auth isolation."""
+
+    def setUp(self):
+        with open(SWARM_SCRIPT, "r", encoding="utf-8") as f:
+            code = f.read()
+
+        helper_globals = {
+            "os": os,
+            "sys": sys,
+            "json": json,
+            "time": __import__("time"),
+            "shutil": __import__("shutil"),
+            "glob": __import__("glob"),
+            "subprocess": __import__("subprocess"),
+        }
+        match1 = re.search(r"def is_auth_or_transient_file\(.*?\):\n(?:    .*\n)+", code)
+        self.assertIsNotNone(match1)
+        exec(match1.group(0), helper_globals)
+
+        match2 = re.search(r"def fast_seed_profile\(.*?\):\n(?:    .*\n)+", code)
+        self.assertIsNotNone(match2)
+        exec(match2.group(0), helper_globals)
+
+        helper_globals["get_antigravity_db_path"] = lambda: ""
+
+        self.is_auth_or_transient_file = helper_globals["is_auth_or_transient_file"]
+        self.fast_seed_profile = helper_globals["fast_seed_profile"]
+
+    def test_10_is_auth_or_transient_file(self):
+        """Test detection of auth, token, cookie, and lock files for isolation."""
+        blocked = [
+            "oauth.json", "token.json", "credentials.json", "access_token",
+            "auth_key.pem", "secret.txt", "cookie.sqlite", "Cookies",
+            "session.lock", "temp.sock", "app.log", "cache.tmp", "DevToolsActivePort"
+        ]
+        for name in blocked:
+            self.assertTrue(self.is_auth_or_transient_file(name), f"Should block: {name}")
+
+        allowed = [
+            "conversation_summaries.db", "brain", "settings.json",
+            "keybindings.json", "extension.vsix", "antigravity.exe", "state.json"
+        ]
+        for name in allowed:
+            self.assertFalse(self.is_auth_or_transient_file(name), f"Should allow: {name}")
+
+    def test_11_fast_seed_profile_structure_and_isolation(self):
+        """Test directory creation, data seeding, and strict credential isolation."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            sys_user = os.path.join(tmp_dir, "sys_user")
+            sys_gemini = os.path.join(sys_user, ".gemini")
+            os.makedirs(os.path.join(sys_gemini, "antigravity", "brain", "conv1"), exist_ok=True)
+
+            # Create mock runtime and conversation DB
+            db_file = os.path.join(sys_gemini, "antigravity", "conversation_summaries.db")
+            with open(db_file, "w", encoding="utf-8") as f:
+                f.write("mock_db_content")
+
+            conv_file = os.path.join(sys_gemini, "antigravity", "brain", "conv1", "state.json")
+            with open(conv_file, "w", encoding="utf-8") as f:
+                f.write("mock_state")
+
+            # Create auth files that MUST be excluded
+            token_file = os.path.join(sys_gemini, "antigravity", "token.json")
+            with open(token_file, "w", encoding="utf-8") as f:
+                f.write("secret_oauth_token")
+
+            old_userprofile = os.environ.get("USERPROFILE")
+            os.environ["USERPROFILE"] = sys_user
+
+            try:
+                prof_data_dir = os.path.join(tmp_dir, "profiles", "profile_02")
+                profile = {
+                    "id": "profile_02",
+                    "name": "Tài khoản 02",
+                    "email": "dev2.antigravity@gmail.com",
+                    "data_dir": prof_data_dir
+                }
+
+                ok = self.fast_seed_profile(profile)
+                self.assertTrue(ok)
+
+                # Verify profile structure
+                prof_gemini = os.path.join(prof_data_dir, "UserProfile", ".gemini")
+                self.assertTrue(os.path.isdir(prof_gemini))
+                self.assertTrue(os.path.isdir(os.path.join(prof_data_dir, "extensions")))
+                self.assertTrue(os.path.isdir(os.path.join(prof_data_dir, "Temp")))
+
+                # Verify conversation DB is present
+                prof_db = os.path.join(prof_gemini, "antigravity", "conversation_summaries.db")
+                self.assertTrue(os.path.isfile(prof_db))
+
+                # Verify brain context is present
+                prof_conv = os.path.join(prof_gemini, "antigravity", "brain", "conv1", "state.json")
+                self.assertTrue(os.path.isfile(prof_conv))
+
+                # CRITICAL: Verify auth tokens are NOT copied
+                prof_token = os.path.join(prof_gemini, "antigravity", "token.json")
+                self.assertFalse(os.path.exists(prof_token), "FATAL: Auth token leaked to secondary profile!")
+
+                # Verify seed marker
+                marker = os.path.join(prof_data_dir, ".seed_info.json")
+                self.assertTrue(os.path.isfile(marker))
+
+                # Verify idempotent instant return
+                t0 = __import__("time").time()
+                ok2 = self.fast_seed_profile(profile, force=False)
+                t_elapsed = __import__("time").time() - t0
+                self.assertTrue(ok2)
+                self.assertLess(t_elapsed, 0.05)
+            finally:
+                if old_userprofile is not None:
+                    os.environ["USERPROFILE"] = old_userprofile
+                else:
+                    os.environ.pop("USERPROFILE", None)
+
+    def test_12_treeview_column_indexing(self):
+        """Test Treeview column values indexing to ensure data_dir resolves correctly."""
+        with open(SWARM_SCRIPT, "r", encoding="utf-8") as f:
+            code = f.read()
+
+        self.assertIn("item_vals[5] if len(item_vals) > 5 else item_vals[3]", code)
+
+    def test_13_tokenizer_whitelist_in_is_auth_or_transient_file(self):
+        """Ensure tokenizer, tiktoken and state files are whitelisted and not stripped."""
+        whitelist_cases = [
+            "tokenizer", "tokenizers", "tiktoken", "sentencepiece_tokenizer.json",
+            "state.json", "conversation.json", "session.json"
+        ]
+        for name in whitelist_cases:
+            self.assertFalse(self.is_auth_or_transient_file(name), f"Should not block: {name}")
+
+    def test_14_secondary_profile_token_preservation(self):
+        """Ensure that if secondary profile logs in with own Gmail, its token is not deleted on re-seed."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            sys_user = os.path.join(tmp_dir, "sys_user")
+            sys_gemini = os.path.join(sys_user, ".gemini")
+            os.makedirs(os.path.join(sys_gemini, "antigravity"), exist_ok=True)
+            with open(os.path.join(sys_gemini, "antigravity", "token.json"), "w", encoding="utf-8") as f:
+                f.write("primary_account_token")
+
+            old_userprofile = os.environ.get("USERPROFILE")
+            os.environ["USERPROFILE"] = sys_user
+
+            try:
+                prof_data_dir = os.path.join(tmp_dir, "profiles", "profile_02")
+                profile = {
+                    "id": "profile_02",
+                    "name": "Tài khoản 02",
+                    "email": "dev2.antigravity@gmail.com",
+                    "data_dir": prof_data_dir
+                }
+
+                # Seed profile first time
+                self.fast_seed_profile(profile)
+
+                # Simulate user logging into Gmail on Profile 02
+                prof_gemini = os.path.join(prof_data_dir, "UserProfile", ".gemini", "antigravity")
+                os.makedirs(prof_gemini, exist_ok=True)
+                prof_token_file = os.path.join(prof_gemini, "token.json")
+                with open(prof_token_file, "w", encoding="utf-8") as f:
+                    f.write("secondary_dev2_gmail_oauth_token")
+
+                # Re-seed with force=True
+                self.fast_seed_profile(profile, force=True)
+
+                # The secondary profile's own login token MUST be preserved
+                self.assertTrue(os.path.isfile(prof_token_file), "Secondary Gmail token must be preserved!")
+                with open(prof_token_file, "r", encoding="utf-8") as f:
+                    content = f.read()
+                self.assertEqual(content, "secondary_dev2_gmail_oauth_token")
+            finally:
+                if old_userprofile is not None:
+                    os.environ["USERPROFILE"] = old_userprofile
+                else:
+                    os.environ.pop("USERPROFILE", None)
+
+    def test_15_globalstorage_and_storage_json_seeding(self):
+        """Ensure storage.json and globalStorage are properly seeded to prevent 'Setting up...' hang."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            sys_user = os.path.join(tmp_dir, "sys_user")
+            sys_appdata = os.path.join(tmp_dir, "sys_appdata")
+            antigravity_appdata = os.path.join(sys_appdata, "Antigravity")
+            user_dir = os.path.join(antigravity_appdata, "User")
+            os.makedirs(user_dir, exist_ok=True)
+
+            with open(os.path.join(user_dir, "storage.json"), "w", encoding="utf-8") as f:
+                f.write('{"telemetry.machineId": "mock"}')
+            with open(os.path.join(antigravity_appdata, "storage.json"), "w", encoding="utf-8") as f:
+                f.write('{"openedPathsList": []}')
+
+            old_userprofile = os.environ.get("USERPROFILE")
+            old_appdata = os.environ.get("APPDATA")
+            os.environ["USERPROFILE"] = sys_user
+            os.environ["APPDATA"] = sys_appdata
+
+            try:
+                prof_data_dir = os.path.join(tmp_dir, "profiles", "profile_03")
+                profile = {
+                    "id": "profile_03",
+                    "name": "Tài khoản 03",
+                    "email": "dev3.antigravity@gmail.com",
+                    "data_dir": prof_data_dir
+                }
+
+                self.fast_seed_profile(profile)
+
+                # Check storage.json in profile
+                prof_storage = os.path.join(prof_data_dir, "User", "storage.json")
+                self.assertTrue(os.path.isfile(prof_storage), "User/storage.json must be seeded!")
+                prof_root_storage = os.path.join(prof_data_dir, "storage.json")
+                self.assertTrue(os.path.isfile(prof_root_storage), "Root storage.json must be seeded!")
+            finally:
+                if old_userprofile is not None:
+                    os.environ["USERPROFILE"] = old_userprofile
+                else:
+                    os.environ.pop("USERPROFILE", None)
+                if old_appdata is not None:
+                    os.environ["APPDATA"] = old_appdata
+                else:
+                    os.environ.pop("APPDATA", None)
+
+
 def run_tests():
     """Run all verification tests and return exit code."""
     suite = unittest.TestSuite()
@@ -310,6 +537,7 @@ def run_tests():
     suite.addTest(loader.loadTestsFromTestCase(TestSwarmCodeStructure))
     suite.addTest(loader.loadTestsFromTestCase(TestQuotaExtractionLogic))
     suite.addTest(loader.loadTestsFromTestCase(TestWebSocketEngine))
+    suite.addTest(loader.loadTestsFromTestCase(TestProfileOptimizationAndSync))
 
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)

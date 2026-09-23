@@ -10,8 +10,8 @@
         {
             "id": "profile_02",
             "name": "Tài khoản 02 (Phụ 1)",
-            "email": "account_02@gmail.com",
-            "data_dir": "C:\\Users\\maing\\AppData\\Roaming\\Antigravity_Profiles\\profile_02"
+            "email": "mainguyenz22016@gmail.com",
+            "data_dir": "⚪ Chưa đồng bộ"
         },
         {
             "id": "profile_03",
@@ -81,7 +81,7 @@
             "id": "proj_timioffice",
             "name": "Timioffice",
             "path": "Z:\\home\\thanhthien\\projects\\timioffice",
-            "conv_count": 53,
+            "conv_count": 56,
             "latest_title": "Start DDEV Project"
         },
         {
@@ -173,6 +173,6 @@
         "profile_2": "proj_1790097803"
     },
     "autostart": false,
-    "last_profile_id": "profile_01",
+    "last_profile_id": "profile_02",
     "last_project_id": "proj_auto_d4067ee0"
 }
