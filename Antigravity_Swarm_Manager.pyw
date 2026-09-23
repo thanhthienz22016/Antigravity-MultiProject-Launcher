@@ -2,34 +2,32 @@
 r"""
 Antigravity Swarm Manager (Multi-Account x Multi-Project Launcher)
 ==================================================================
-Phiên bản: 2.2 (Nâng Cấp Pro: Auto-Sync Antigravity Projects & Quick Folder Picker)
+Phiên bản: 2.4 Pro (AI Model Quota Tracking & Smart Window Focus)
 
 Tính năng chính:
+- [P0 - Giám Sát Quota AI Model Realtime & Đa Tầng]:
+  - Tự động theo dõi Quota từng model: Gemini (5-Hour & Weekly) và Claude/GPT (5-Hour & Weekly).
+  - Tích hợp Chrome DevTools Protocol (CDP) trực tiếp qua DevToolsActivePort để trích xuất Quota realtime.
+  - Quét bộ nhớ đệm SQLite state.vscdb và LevelDB trong User Data Dir của từng Profile khi offline.
+  - Hiển thị trực quan với mã màu chuẩn: 🟢 >50%, 🟡 15-50%, 🔴 <15% trên Dashboard, Bảng Matrix và Giám Sát.
+  - Thẻ thông số Quota hiển thị phần trăm giới hạn còn lại và thời gian đếm ngược làm mới (refresh time).
+- [P0 - Nút Mở / Focus Cửa Sổ Antigravity Thông Minh (Smart Open / Focus)]:
+  - Khi Profile ĐÃ ĐANG CHẠY: Tự động khôi phục (SW_RESTORE) và đưa cửa sổ lên trước màn hình (SetForegroundWindow)
+    mượt mà, tuyệt đối KHÔNG bật popup cảnh báo chặn gây phiền toái.
+  - Khi Profile CHƯA CHẠY: Khởi chạy trực tiếp phân vùng Antigravity độc lập cho tài khoản và dự án đó.
+  - Nút bấm và danh sách Combobox tự động đổi trạng thái trực quan [🟢 Đang chạy] / [⚪ Sẵn sàng].
 - [P0 - Tự Động Auto-Sync Projects từ Database Antigravity]:
-  - Đọc trực tiếp file SQLite conversation_summaries.db của Antigravity.
+  - Đọc trực tiếp file SQLite conversation_summaries.db của Antigravity ở chế độ read-only.
   - Quét workspace_uris và title, giải mã URI file:///... thành Windows path chuẩn (Z:\..., C:\...).
   - Thống kê số lượng cuộc hội thoại (convs) và tên tác vụ gần nhất cho từng dự án.
-  - Nút "🔄 Đồng Bộ Lại Từ Antigravity" làm mới danh sách tức thời.
 - [P0 - Tiện Ích Chọn Thư Mục Khác (Quick Folder Picker)]:
   - Nút "📁 Chọn Thư Mục Khác..." mở Windows Folder Picker chọn bất kỳ thư mục nào (Windows / WSL2 Z:).
-  - Tự động ghi nhận vào danh sách dự án và sẵn sàng mở ngay với Antigravity.
 - [P0 - Win32 Title Hook]: Tự động đổi tiêu đề cửa sổ Antigravity & Taskbar Windows:
-  "[Gmail: <Tên/Email>] - <Tên Dự Án> - Antigravity" giúp phân biệt tức thì các cửa sổ.
-- [P0 - Khay Hệ Thống (System Tray)]: 
-  - Khi bấm tắt (dấu X), app tự động ẩn ngầm vào System Tray bên cạnh đồng hồ Windows.
-  - Click chuột hoặc double click vào icon khay để mở lại giao diện.
-  - Chuột phải vào tray icon mở menu: "🖥️ Mở Giao Diện", "💥 Đóng Tất Cả Cửa Sổ AI", "❌ Thoát Hoàn Toàn".
-- [P0 - Tự Khởi Động Cùng Windows]:
-  - Đăng ký vào Windows Registry (HKCU Run), tự khởi động ngầm vào System Tray khi bật máy (--tray).
-  - Tùy chọn Bật/Tắt trực tiếp trên giao diện người dùng.
-- [P0 - Lưu Cấu Hình Vĩnh Viễn]:
-  - Tự động lưu và nhớ đường dẫn Antigravity.exe, tài khoản Gmail và dự án đã chọn gần nhất.
-  - Bật máy lên chỉ việc vào app và chọn tài khoản + dự án làm việc ngay.
-- [P1 - Quản lý CRUD]: Thêm / Sửa / Xóa Profile và Dự án trực quan.
-- [P1 - Cảnh báo xung đột]: Tự động phát hiện và cảnh báo nguy cơ đè code khi nhiều Gmail
-  cùng mở 1 thư mục dự án (khuyến nghị Git Worktree).
-- [P2 - Giám sát Realtime]: Bảng theo dõi tiến trình sống (PID, Tài khoản, Dự án, Uptime),
-  kèm tính năng Focus cửa sổ và Dừng / Kill tiến trình (đơn lẻ hoặc hàng loạt).
+  "[Gmail: <Tên/Email>] - <Tên Dự Án> - Antigravity".
+- [P0 - Khay Hệ Thống (System Tray) & Chạy Ngầm Windows]:
+  - Ẩn ngầm vào System Tray khi bấm dấu [X], khởi động cùng Windows (Registry HKCU Run).
+- [P0 - Phân Vùng Độc Lập 10 Gmail Profiles]:
+  - Mỗi Profile là một User Data Dir riêng biệt, độc lập phiên đăng nhập và tối đa hóa Quota song song.
 """
 
 import os
@@ -44,7 +42,11 @@ from pathlib import Path
 import shutil
 import sqlite3
 import urllib.parse
+import urllib.request
 import hashlib
+import socket
+import struct
+import base64
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import winreg
@@ -148,8 +150,26 @@ user32.ShowWindow.restype = wintypes.BOOL
 user32.SetForegroundWindow.argtypes = [wintypes.HWND]
 user32.SetForegroundWindow.restype = wintypes.BOOL
 
+user32.BringWindowToTop.argtypes = [wintypes.HWND]
+user32.BringWindowToTop.restype = wintypes.BOOL
+
+user32.GetForegroundWindow.argtypes = []
+user32.GetForegroundWindow.restype = wintypes.HWND
+
+user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+user32.AttachThreadInput.restype = wintypes.BOOL
+
+kernel32.GetCurrentThreadId.argtypes = []
+kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+
 user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 user32.PostMessageW.restype = wintypes.BOOL
+
+user32.keybd_event.argtypes = [wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, ctypes.c_size_t]
+user32.keybd_event.restype = None
+
+VK_MENU = 0x12
+KEYEVENTF_KEYUP = 0x0002
 
 # Setup Win32 System Tray & Window Class API Prototypes
 user32.RegisterClassExW.argtypes = [ctypes.POINTER(WNDCLASSEXW)]
@@ -617,6 +637,691 @@ def find_windows_for_pids(pids):
     cb = WNDENUMPROC(enum_windows_callback)
     user32.EnumWindows(cb, 0)
     return results
+
+def bring_window_to_foreground(hwnd):
+    """
+    Kích hoạt và đưa cửa sổ Antigravity lên hàng đầu (Foreground),
+    hỗ trợ khôi phục nếu đang bị thu nhỏ (SW_RESTORE),
+    và giải phóng Thread Input kèm VK_MENU tap để vượt qua hạn chế focus của Windows 10/11.
+    """
+    if not hwnd or not user32.IsWindow(hwnd):
+        return False
+    try:
+        # 1. Khôi phục nếu bị minimize
+        user32.ShowWindow(hwnd, 9) # SW_RESTORE
+
+        # 2. Giả lập bấm nhẹ phím ALT (VK_MENU) để cấp quyền foreground trên Windows 10/11
+        try:
+            user32.keybd_event(VK_MENU, 0, 0, 0)
+            user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+        except Exception:
+            pass
+
+        # 3. AttachThreadInput để bypass Windows focus restriction
+        fore_hwnd = user32.GetForegroundWindow()
+        fore_thread = user32.GetWindowThreadProcessId(fore_hwnd, None) if fore_hwnd else 0
+        target_thread = user32.GetWindowThreadProcessId(hwnd, None)
+        cur_thread = kernel32.GetCurrentThreadId()
+
+        attached_threads = []
+        if fore_thread and fore_thread != cur_thread:
+            if user32.AttachThreadInput(cur_thread, fore_thread, True):
+                attached_threads.append((cur_thread, fore_thread))
+        if target_thread and target_thread != cur_thread and target_thread != fore_thread:
+            if user32.AttachThreadInput(cur_thread, target_thread, True):
+                attached_threads.append((cur_thread, target_thread))
+
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+        user32.ShowWindow(hwnd, 5) # SW_SHOW
+
+        for t1, t2 in attached_threads:
+            try:
+                user32.AttachThreadInput(t1, t2, False)
+            except Exception:
+                pass
+
+        return True
+    except Exception:
+        try:
+            user32.ShowWindow(hwnd, 9)
+            user32.SetForegroundWindow(hwnd)
+            return True
+        except Exception:
+            return False
+
+def find_all_antigravity_windows():
+    """Tìm tất cả HWND hiển thị của các cửa sổ Antigravity đang chạy trên Desktop."""
+    results = []
+    GW_OWNER = 4
+    def enum_cb(hwnd, lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        owner = user32.GetWindow(hwnd, GW_OWNER)
+        if owner != 0:
+            return True
+        title = get_window_title(hwnd)
+        if not title or not title.strip():
+            return True
+        skip_titles = {"Chrome Legacy Window", "Default IME", "MSCTFIME UI"}
+        if title.strip() in skip_titles:
+            return True
+        rect = RECT()
+        if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            w = rect.right - rect.left
+            h = rect.bottom - rect.top
+            if w > 150 and h > 150:
+                pid = get_window_pid(hwnd)
+                results.append((hwnd, pid, title))
+        return True
+    cb = WNDENUMPROC(enum_cb)
+    user32.EnumWindows(cb, 0)
+    return results
+
+# ---------------------------------------------------------------------------
+# Lightweight RFC 6455 WebSocket Client (Pure Python Standard Library)
+# ---------------------------------------------------------------------------
+class SimpleWebSocket:
+    """
+    Client WebSocket RFC 6455 siêu nhẹ thuần Python (không phụ thuộc thư viện ngoài).
+    Tương thích 100% với Chrome DevTools Protocol (CDP), hỗ trợ exact buffer reads,
+    bộ đệm phản hồi out-of-order RPC response cache, tự động phản hồi Ping -> Pong
+    và luồng gửi an toàn thread-safe.
+    """
+    def __init__(self, url, timeout=4.0, connect=True):
+        self.url = url
+        self.timeout = timeout
+        self.sock = None
+        self.connected = False
+        self._msg_id = 0
+        self._msg_lock = threading.Lock()
+        self._read_buf = bytearray()
+        self._responses = {}
+        self._send_lock = threading.Lock()
+        if connect:
+            self._connect()
+
+    def _parse_frame_from_buf(self):
+        buf_len = len(self._read_buf)
+        if buf_len < 2:
+            return None
+        b1 = self._read_buf[0]
+        b2 = self._read_buf[1]
+        fin = bool(b1 & 0x80)
+        opcode = b1 & 0x0F
+        is_masked = bool(b2 & 0x80)
+        payload_len = b2 & 0x7F
+        offset = 2
+        if payload_len == 126:
+            if buf_len < offset + 2:
+                return None
+            payload_len = struct.unpack("!H", self._read_buf[offset:offset+2])[0]
+            offset += 2
+        elif payload_len == 127:
+            if buf_len < offset + 8:
+                return None
+            payload_len = struct.unpack("!Q", self._read_buf[offset:offset+8])[0]
+            offset += 8
+
+        mask_key = None
+        if is_masked:
+            if buf_len < offset + 4:
+                return None
+            mask_key = self._read_buf[offset:offset+4]
+            offset += 4
+
+        total_frame_len = offset + payload_len
+        if buf_len < total_frame_len:
+            return None
+
+        raw_payload = self._read_buf[offset:total_frame_len]
+        del self._read_buf[:total_frame_len]
+
+        if is_masked and mask_key:
+            unmasked = bytearray(raw_payload)
+            for i in range(len(unmasked)):
+                unmasked[i] ^= mask_key[i % 4]
+            payload_bytes = bytes(unmasked)
+        else:
+            payload_bytes = bytes(raw_payload)
+
+        return opcode, fin, payload_bytes
+
+    def _connect(self):
+        if not self.url.startswith("ws://"):
+            raise ValueError(f"Chỉ hỗ trợ ws://: {self.url}")
+        raw = self.url[5:]
+        slash_idx = raw.find("/")
+        if slash_idx != -1:
+            host_port = raw[:slash_idx]
+            path = raw[slash_idx:]
+        else:
+            host_port = raw
+            path = "/"
+        if ":" in host_port:
+            host, port_str = host_port.split(":")
+            port = int(port_str)
+        else:
+            host = host_port
+            port = 80
+
+        self.sock = socket.create_connection((host, port), timeout=self.timeout)
+        self.sock.settimeout(self.timeout)
+
+        key = base64.b64encode(os.urandom(16)).decode("utf-8")
+        handshake_req = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {host}:{port}\r\n"
+            f"Upgrade: websocket\r\n"
+            f"Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            f"Sec-WebSocket-Version: 13\r\n\r\n"
+        )
+        self.sock.sendall(handshake_req.encode("utf-8"))
+
+        resp = bytearray()
+        while b"\r\n\r\n" not in resp:
+            chunk = self.sock.recv(1024)
+            if not chunk:
+                raise ConnectionError("Kết nối bị đóng trong quá trình handshake WebSocket")
+            resp.extend(chunk)
+
+        header_end = resp.find(b"\r\n\r\n") + 4
+        if header_end < len(resp):
+            self._read_buf.extend(resp[header_end:])
+
+        header_text = resp[:header_end].decode("utf-8", errors="ignore")
+        if "101 Switching Protocols" not in header_text:
+            raise ConnectionError(f"WebSocket handshake thất bại: {header_text[:80]}")
+        self.connected = True
+
+    def _encode_frame(self, data, opcode=0x1):
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        elif not isinstance(data, (bytes, bytearray)):
+            data = json.dumps(data).encode("utf-8")
+        length = len(data)
+        frame = bytearray([0x80 | (opcode & 0x0F)])
+        if length <= 125:
+            frame.append(0x80 | length)
+        elif length <= 65535:
+            frame.append(0x80 | 126)
+            frame.extend(struct.pack("!H", length))
+        else:
+            frame.append(0x80 | 127)
+            frame.extend(struct.pack("!Q", length))
+
+        mask_key = os.urandom(4)
+        frame.extend(mask_key)
+        masked_data = bytearray(data)
+        for i in range(len(masked_data)):
+            masked_data[i] ^= mask_key[i % 4]
+        frame.extend(masked_data)
+        return bytes(frame)
+
+    def send_pong(self, payload):
+        try:
+            frame = self._encode_frame(payload, opcode=0xA)
+            with self._send_lock:
+                self.sock.sendall(frame)
+        except Exception:
+            pass
+
+    def send_json(self, payload):
+        frame = self._encode_frame(payload, opcode=0x1)
+        with self._send_lock:
+            self.sock.sendall(frame)
+
+    def read_message(self, timeout=2.0):
+        if not self.connected or not self.sock:
+            return None
+        end_time = time.time() + timeout
+        fragments = bytearray()
+        message_opcode = None
+
+        while time.time() < end_time and self.connected:
+            parsed = self._parse_frame_from_buf()
+            if parsed is not None:
+                opcode, fin, payload = parsed
+                if opcode == 0x8:
+                    self.close()
+                    return None
+                if opcode == 0x9:
+                    self.send_pong(payload)
+                    continue
+                if opcode == 0xA:
+                    continue
+                if opcode == 0x0:
+                    fragments.extend(payload)
+                    if fin:
+                        if message_opcode in (0x1, 0x2):
+                            try:
+                                return json.loads(fragments.decode("utf-8", errors="ignore"))
+                            except Exception:
+                                return None
+                        fragments.clear()
+                        message_opcode = None
+                    continue
+                if opcode in (0x1, 0x2):
+                    if fin:
+                        try:
+                            return json.loads(payload.decode("utf-8", errors="ignore"))
+                        except Exception:
+                            return None
+                    else:
+                        message_opcode = opcode
+                        fragments.extend(payload)
+                        continue
+
+            rem_timeout = max(0.05, end_time - time.time())
+            self.sock.settimeout(rem_timeout)
+            try:
+                chunk = self.sock.recv(8192)
+                if not chunk:
+                    self.close()
+                    return None
+                self._read_buf.extend(chunk)
+            except (socket.timeout, TimeoutError):
+                if time.time() >= end_time:
+                    break
+                continue
+            except Exception:
+                self.close()
+                return None
+        return None
+
+    def call_method(self, method, params=None, await_response=True, timeout=2.0):
+        if not self.connected:
+            return None
+        with self._msg_lock:
+            self._msg_id += 1
+            msg_id = self._msg_id
+        req = {"id": msg_id, "method": method, "params": params or {}}
+        try:
+            self.send_json(req)
+        except Exception:
+            self.connected = False
+            return None
+
+        if not await_response:
+            return msg_id
+
+        if msg_id in self._responses:
+            return self._responses.pop(msg_id)
+
+        end_time = time.time() + timeout
+        while time.time() < end_time and self.connected:
+            rem = max(0.08, end_time - time.time())
+            msg = self.read_message(timeout=rem)
+            if msg and isinstance(msg, dict):
+                if "id" in msg:
+                    if msg["id"] == msg_id:
+                        return msg
+                    else:
+                        self._responses[msg["id"]] = msg
+        return None
+
+    def close(self):
+        self.connected = False
+        try:
+            if self.sock:
+                self.sock.close()
+        except Exception:
+            pass
+
+
+def is_port_listening(port: int, host="127.0.0.1", timeout=0.4) -> bool:
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Hệ Thống Giám Sát & Trích Xuất Quota AI Models (Gemini & Claude/GPT)
+# ---------------------------------------------------------------------------
+CDP_QUOTA_JS = r"""
+(() => {
+    try {
+        const text = (document.body && document.body.innerText) ? document.body.innerText : "";
+        if (!text) return null;
+
+        const res = {};
+
+        // Parse Gemini Section
+        const geminiBlock = text.match(/Gemini\s+Models[\s\S]*?(?:Claude|GPT|Enable\s+AI|$)/i);
+        // Parse Claude / GPT Section
+        const claudeBlock = text.match(/(?:Claude\s+and\s+GPT|Claude\s+models|GPT\s+models)[\s\S]*?(?:Gemini|Enable\s+AI|$)/i);
+
+        function parseBlock(blockStr) {
+            if (!blockStr) return {};
+            const d = {};
+            const splitIdx = blockStr.search(/(?:Five|5)[\s\-]+Hour\s+Limit/i);
+            const wPart = splitIdx !== -1 ? blockStr.substring(0, splitIdx) : blockStr;
+            const fPart = splitIdx !== -1 ? blockStr.substring(splitIdx) : "";
+
+            const wm = wPart.match(/Weekly\s+Limit\s+Remaining[\s\S]*?(\d+)%/i);
+            if (wm) d.weekly = parseInt(wm[1], 10);
+            const wr = wPart.match(/refresh\s+in\s+([^\n\r.]+)/i);
+            if (wr) d.weekly_refresh = wr[1].trim();
+
+            if (fPart) {
+                const fm = fPart.match(/(?:Five|5)[\s\-]+Hour\s+Limit\s+Remaining[\s\S]*?(\d+)%/i);
+                if (fm) d.five_hour = parseInt(fm[1], 10);
+                const fr = fPart.match(/refresh\s+in\s+([^\n\r.]+)/i);
+                if (fr) d.five_hour_refresh = fr[1].trim();
+            }
+
+            return d;
+        }
+
+        if (geminiBlock) {
+            const g = parseBlock(geminiBlock[0]);
+            if (g.weekly !== undefined) res.gemini_weekly = g.weekly;
+            if (g.weekly_refresh) res.gemini_weekly_refresh = g.weekly_refresh;
+            if (g.five_hour !== undefined) res.gemini_5h = g.five_hour;
+            if (g.five_hour_refresh) res.gemini_5h_refresh = g.five_hour_refresh;
+        }
+
+        if (claudeBlock) {
+            const c = parseBlock(claudeBlock[0]);
+            if (c.weekly !== undefined) res.claude_weekly = c.weekly;
+            if (c.weekly_refresh) res.claude_weekly_refresh = c.weekly_refresh;
+            if (c.five_hour !== undefined) res.claude_5h = c.five_hour;
+            if (c.five_hour_refresh) res.claude_5h_refresh = c.five_hour_refresh;
+        }
+
+        // Check localStorage / sessionStorage for quota cache
+        try {
+            for (const st of [window.localStorage, window.sessionStorage]) {
+                if (!st) continue;
+                for (let i = 0; i < st.length; i++) {
+                    const k = st.key(i);
+                    const v = st.getItem(k);
+                    if (v && (v.includes("quota") || v.includes("limitRemaining") || v.includes("remainingFraction"))) {
+                        try {
+                            const parsed = JSON.parse(v);
+                            if (parsed && typeof parsed === "object") {
+                                if (parsed.gemini && res.gemini_5h === undefined) {
+                                    if (parsed.gemini.fiveHour !== undefined) res.gemini_5h = Math.round(parsed.gemini.fiveHour * (parsed.gemini.fiveHour <= 1 ? 100 : 1));
+                                    if (parsed.gemini.weekly !== undefined) res.gemini_weekly = Math.round(parsed.gemini.weekly * (parsed.gemini.weekly <= 1 ? 100 : 1));
+                                }
+                                if (parsed.claude && res.claude_5h === undefined) {
+                                    if (parsed.claude.fiveHour !== undefined) res.claude_5h = Math.round(parsed.claude.fiveHour * (parsed.claude.fiveHour <= 1 ? 100 : 1));
+                                    if (parsed.claude.weekly !== undefined) res.claude_weekly = Math.round(parsed.claude.weekly * (parsed.claude.weekly <= 1 ? 100 : 1));
+                                }
+                            }
+                        } catch(e) {}
+                    }
+                }
+            }
+        } catch(e) {}
+
+        if (Object.keys(res).length > 0) {
+            res.timestamp = Date.now();
+            return res;
+        }
+        return null;
+    } catch(err) {
+        return null;
+    }
+})()
+"""
+
+def format_quota_badge(pct):
+    """Định dạng badge phần trăm Quota kèm emoji màu sắc chuẩn: 🟢 >50%, 🟡 15-50%, 🔴 <15%."""
+    if pct is None or pct < 0:
+        return "⚪ --%"
+    if pct > 50:
+        return f"🟢 {pct}%"
+    elif pct >= 15:
+        return f"🟡 {pct}%"
+    else:
+        return f"🔴 {pct}%"
+
+def format_quota_cell(pct_5h, pct_w):
+    """Định dạng chuỗi hiển thị cho ô bảng Quota (5h / Tuần)."""
+    if pct_5h is None and pct_w is None:
+        return "⚪ Chưa đồng bộ"
+    s_5h = format_quota_badge(pct_5h)
+    s_w = format_quota_badge(pct_w)
+    return f"{s_5h} (5h) / {s_w} (Tuần)"
+
+def parse_quota_from_text_or_json(text):
+    """Trích xuất thông số Quota từ chuỗi JSON, SQLite BLOB (bytes) hoặc chuỗi text tự do."""
+    if text is None:
+        return None
+    if isinstance(text, (bytes, bytearray)):
+        try:
+            text = text.decode("utf-8", errors="ignore")
+        except Exception:
+            return None
+    if not isinstance(text, str) or not text.strip():
+        return None
+
+    res = {}
+    try:
+        trimmed = text.strip()
+        if (trimmed.startswith("{") and trimmed.endswith("}")) or (trimmed.startswith("[") and trimmed.endswith("]")):
+            loaded = json.loads(trimmed)
+            if isinstance(loaded, dict):
+                for gk in ["gemini", "geminiModels", "gemini_models"]:
+                    if gk in loaded and isinstance(loaded[gk], dict):
+                        g = loaded[gk]
+                        if "fiveHour" in g: res["gemini_5h"] = int(g["fiveHour"] * (100 if g["fiveHour"] <= 1 else 1))
+                        if "weekly" in g: res["gemini_weekly"] = int(g["weekly"] * (100 if g["weekly"] <= 1 else 1))
+                for ck in ["claude", "claudeAndGpt", "claude_and_gpt", "claudeModels"]:
+                    if ck in loaded and isinstance(loaded[ck], dict):
+                        c = loaded[ck]
+                        if "fiveHour" in c: res["claude_5h"] = int(c["fiveHour"] * (100 if c["fiveHour"] <= 1 else 1))
+                        if "weekly" in c: res["claude_weekly"] = int(c["weekly"] * (100 if c["weekly"] <= 1 else 1))
+                for k in ["gemini_5h", "gemini_weekly", "claude_5h", "claude_weekly",
+                          "gemini_5h_refresh", "gemini_weekly_refresh", "claude_5h_refresh", "claude_weekly_refresh"]:
+                    if k in loaded and k not in res:
+                        res[k] = loaded[k]
+    except Exception:
+        pass
+
+    def parse_section(section_str):
+        d = {}
+        split_m = re.search(r'(?:Five|5)[\s\-]+Hour\s+Limit', section_str, re.IGNORECASE)
+        if split_m:
+            w_part = section_str[:split_m.start()]
+            f_part = section_str[split_m.start():]
+        else:
+            w_part = section_str
+            f_part = ""
+
+        wm = re.search(r'Weekly\s+Limit\s+Remaining[\s\S]*?(\d+)%', w_part, re.IGNORECASE)
+        if wm: d["weekly"] = int(wm.group(1))
+        wr = re.search(r'refresh\s+in\s+([^\n\r.]+)', w_part, re.IGNORECASE)
+        if wr: d["weekly_refresh"] = wr.group(1).strip()
+
+        if f_part:
+            fm = re.search(r'(?:Five|5)[\s\-]+Hour\s+Limit\s+Remaining[\s\S]*?(\d+)%', f_part, re.IGNORECASE)
+            if fm: d["five_hour"] = int(fm.group(1))
+            fr = re.search(r'refresh\s+in\s+([^\n\r.]+)', f_part, re.IGNORECASE)
+            if fr: d["five_hour_refresh"] = fr.group(1).strip()
+
+        return d
+
+    gem_m = re.search(r'Gemini\s+Models[\s\S]*?(?:Claude|GPT|Enable\s+AI|$)', text, re.IGNORECASE)
+    if gem_m:
+        gd = parse_section(gem_m.group(0))
+        if "weekly" in gd: res["gemini_weekly"] = gd["weekly"]
+        if "weekly_refresh" in gd: res["gemini_weekly_refresh"] = gd["weekly_refresh"]
+        if "five_hour" in gd: res["gemini_5h"] = gd["five_hour"]
+        if "five_hour_refresh" in gd: res["gemini_5h_refresh"] = gd["five_hour_refresh"]
+
+    cld_m = re.search(r'(?:Claude\s+and\s+GPT|Claude\s+models|GPT\s+models)[\s\S]*?(?:Gemini|Enable\s+AI|$)', text, re.IGNORECASE)
+    if cld_m:
+        cd = parse_section(cld_m.group(0))
+        if "weekly" in cd: res["claude_weekly"] = cd["weekly"]
+        if "weekly_refresh" in cd: res["claude_weekly_refresh"] = cd["weekly_refresh"]
+        if "five_hour" in cd: res["claude_5h"] = cd["five_hour"]
+        if "five_hour_refresh" in cd: res["claude_5h_refresh"] = cd["five_hour_refresh"]
+
+    if res:
+        res["timestamp"] = int(time.time())
+        return res
+    return None
+
+def extract_quota_from_sqlite(db_path):
+    """Trích xuất Quota từ file SQLite state.vscdb trong User Data Dir."""
+    if not db_path or not os.path.isfile(db_path):
+        return None
+    conn = None
+    try:
+        db_uri = Path(os.path.abspath(db_path)).as_uri() + "?mode=ro"
+        conn = sqlite3.connect(db_uri, uri=True, timeout=1.8)
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ItemTable'")
+        if not cur.fetchone():
+            return None
+        cur.execute("SELECT key, value FROM ItemTable WHERE key LIKE '%quota%' OR key LIKE '%model%' OR key LIKE '%gemini%' OR key LIKE '%claude%'")
+        rows = cur.fetchall()
+        for key, val in rows:
+            if not val:
+                continue
+            parsed = parse_quota_from_text_or_json(val)
+            if parsed:
+                return parsed
+    except Exception:
+        pass
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return None
+
+def get_cached_profile_quota(data_dir):
+    """Đọc dữ liệu Quota đã lưu trong file quota_cache.json của Profile."""
+    if not data_dir:
+        return None
+    cache_file = os.path.join(data_dir, "quota_cache.json")
+    if os.path.isfile(cache_file):
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            pass
+    return None
+
+def save_cached_profile_quota(data_dir, quota_data):
+    """Lưu dữ liệu Quota vào file quota_cache.json của Profile."""
+    if not data_dir or not quota_data:
+        return False
+    try:
+        os.makedirs(data_dir, exist_ok=True)
+        cache_file = os.path.join(data_dir, "quota_cache.json")
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump(quota_data, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception:
+        return False
+
+def probe_cdp_for_quota(port):
+    """
+    Kết nối vào DevToolsActivePort của instance Antigravity đang chạy,
+    quét các targets (page, webview, iframe) và thực thi probe CDP_QUOTA_JS.
+    """
+    if not is_port_listening(port):
+        return None
+    try:
+        url = f"http://127.0.0.1:{port}/json"
+        req = urllib.request.Request(url, headers={"User-Agent": "AntigravitySwarmManager"})
+        with urllib.request.urlopen(req, timeout=1.8) as resp:
+            targets = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+
+    candidate_targets = [
+        t for t in targets
+        if t.get("type") in ("page", "webview", "iframe") and "webSocketDebuggerUrl" in t
+    ]
+
+    for target in candidate_targets:
+        ws_url = target["webSocketDebuggerUrl"]
+        try:
+            ws = SimpleWebSocket(ws_url, timeout=2.2)
+            res = ws.call_method("Runtime.evaluate", {
+                "expression": CDP_QUOTA_JS,
+                "returnByValue": True,
+                "awaitPromise": True
+            }, await_response=True, timeout=1.8)
+            ws.close()
+            if res and "result" in res:
+                val = res["result"].get("result", {}).get("value")
+                if isinstance(val, dict) and (val.get("gemini_5h") is not None or val.get("claude_5h") is not None):
+                    val["source"] = f"CDP Port {port}"
+                    return val
+        except Exception:
+            continue
+
+    return None
+
+def get_profile_quota(profile):
+    """
+    Lấy thông tin Quota của một Profile theo cơ chế đa tầng:
+    1. CDP Realtime (nếu Antigravity đang chạy với DevToolsActivePort)
+    2. Quota Cache file (quota_cache.json)
+    3. SQLite state.vscdb / conversation_summaries.db
+    """
+    data_dir = profile.get("data_dir", "")
+    if not data_dir:
+        return None
+
+    # 1. CDP Realtime
+    port_file = os.path.join(data_dir, "DevToolsActivePort")
+    if os.path.isfile(port_file):
+        try:
+            with open(port_file, "r", encoding="utf-8") as f:
+                lines = [l.strip() for l in f.readlines() if l.strip()]
+            if lines and lines[0].isdigit():
+                port = int(lines[0])
+                cdp_res = probe_cdp_for_quota(port)
+                if cdp_res:
+                    save_cached_profile_quota(data_dir, cdp_res)
+                    return cdp_res
+        except Exception:
+            pass
+
+    # 2. File quota_cache.json
+    cached = get_cached_profile_quota(data_dir)
+    if cached:
+        if "source" not in cached:
+            cached["source"] = "Bộ nhớ đệm"
+        return cached
+
+    # 3. Quét SQLite state.vscdb trong User Data Dir và UserProfile
+    state_candidates = [
+        os.path.join(data_dir, "User", "globalStorage", "state.vscdb"),
+        os.path.join(data_dir, "globalStorage", "state.vscdb"),
+        os.path.join(data_dir, "UserProfile", "AppData", "Roaming", "Antigravity", "User", "globalStorage", "state.vscdb"),
+        os.path.join(data_dir, "UserProfile", "AppData", "Roaming", "Code", "User", "globalStorage", "state.vscdb"),
+        os.path.join(data_dir, "UserProfile", ".gemini", "antigravity", "conversation_summaries.db"),
+        os.path.join(data_dir, ".gemini", "antigravity", "conversation_summaries.db"),
+        os.path.join(data_dir, "antigravity_data", "state.vscdb"),
+    ]
+    # Quét thêm các file workspaceStorage nếu có
+    ws_pattern = os.path.join(data_dir, "User", "workspaceStorage", "*", "state.vscdb")
+    for ws_db in glob.glob(ws_pattern):
+        state_candidates.append(ws_db)
+
+    for db_path in state_candidates:
+        if os.path.isfile(db_path):
+            sq_res = extract_quota_from_sqlite(db_path)
+            if sq_res:
+                sq_res["source"] = "SQLite Storage"
+                save_cached_profile_quota(data_dir, sq_res)
+                return sq_res
+
+    return None
 
 def kill_process_tree(pid, hwnd=None, extra_pids=None):
     """Dừng triệt để tiến trình và toàn bộ tiến trình con bằng taskkill và WM_CLOSE."""
@@ -1198,6 +1903,13 @@ class SwarmManagerApp(tk.Tk):
 
         self.config_data = load_config()
         self.running_instances = [] # list of dicts: pid, proc, profile, project, start_time, hwnd, hook_thread
+        self.quota_cache = {}
+
+        # Nạp trước thông số Quota đã lưu trên đĩa cho từng Profile
+        for p in self.config_data.get("profiles", []):
+            cached_q = get_cached_profile_quota(p.get("data_dir", ""))
+            if cached_q:
+                self.quota_cache[p["id"]] = cached_q
 
         # Tự động nạp và cập nhật các dự án từ database Antigravity khi khởi động
         try:
@@ -1208,6 +1920,7 @@ class SwarmManagerApp(tk.Tk):
         self._build_ui()
         self._setup_system_tray()
         self._start_monitor_timer()
+        self._start_quota_monitor_timer()
 
         # Khi bấm nút [X] đóng cửa sổ: Ẩn vào khay hệ thống (System Tray)
         self.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
@@ -1227,6 +1940,7 @@ class SwarmManagerApp(tk.Tk):
         self.style.configure("SubHeader.TLabel", font=("Segoe UI", 9, "italic"), foreground="#666666")
         self.style.configure("Warning.TLabel", font=("Segoe UI", 10, "bold"), foreground="#d9534f")
         self.style.configure("Success.TButton", font=("Segoe UI", 10, "bold"), foreground="#28a745")
+        self.style.configure("Accent.TButton", font=("Segoe UI", 10, "bold"), foreground="#007acc")
         self.style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"))
         self.style.configure("Treeview", font=("Segoe UI", 9), rowheight=26)
 
@@ -1413,7 +2127,7 @@ class SwarmManagerApp(tk.Tk):
         ttk.Label(q_grid, text="Chọn Profile:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
         self.quick_profile_cb = ttk.Combobox(q_grid, state="readonly", width=42)
         self.quick_profile_cb.grid(row=0, column=1, padx=5, pady=5)
-        self.quick_profile_cb.bind("<<ComboboxSelected>>", lambda e: self._save_current_state())
+        self.quick_profile_cb.bind("<<ComboboxSelected>>", self._on_quick_profile_change)
 
         ttk.Label(q_grid, text="Chọn Dự Án:").grid(row=0, column=2, sticky=tk.W, padx=10, pady=5)
         self.quick_project_cb = ttk.Combobox(q_grid, state="readonly", width=38)
@@ -1435,13 +2149,13 @@ class SwarmManagerApp(tk.Tk):
         )
         btn_sync.grid(row=0, column=5, padx=5, pady=5)
 
-        btn_launch_single = ttk.Button(
+        self.btn_launch_single = ttk.Button(
             q_grid,
-            text="▶ Mở Cửa Sổ Này",
+            text="▶ Mở / Kích Hoạt Cửa Sổ",
             style="Success.TButton",
             command=self._launch_single_selected
         )
-        btn_launch_single.grid(row=0, column=6, padx=(10, 5), pady=5)
+        self.btn_launch_single.grid(row=0, column=6, padx=(10, 5), pady=5)
 
         btn_ten_profiles = ttk.Button(
             q_grid,
@@ -1450,30 +2164,86 @@ class SwarmManagerApp(tk.Tk):
         )
         btn_ten_profiles.grid(row=0, column=7, padx=5, pady=5)
 
-        # Matrix Mapping Table: Cho phép gán từng Profile -> Dự Án cụ thể
-        matrix_frame = ttk.LabelFrame(self.tab_launch, text="Bảng Phân Bổ Swarm Matrix (Multi-Launch)", padding=10)
+        # Quota Card Frame cho Profile đang chọn
+        self.quota_card = ttk.LabelFrame(quick_frame, text="📊 Giám Sát Quota AI Models (Profile Đang Chọn)", padding=8)
+        self.quota_card.pack(fill=tk.X, pady=(8, 0))
+
+        q_top = ttk.Frame(self.quota_card)
+        q_top.pack(fill=tk.X)
+
+        self.lbl_gemini_quota = ttk.Label(
+            q_top,
+            text="Gemini Models:  5 Giờ: ⚪ --%  |  Hàng Tuần: ⚪ --%",
+            font=("Segoe UI", 9, "bold")
+        )
+        self.lbl_gemini_quota.pack(side=tk.LEFT, padx=5)
+
+        self.lbl_claude_quota = ttk.Label(
+            q_top,
+            text="Claude & GPT:   5 Giờ: ⚪ --%  |  Hàng Tuần: ⚪ --%",
+            font=("Segoe UI", 9, "bold")
+        )
+        self.lbl_claude_quota.pack(side=tk.LEFT, padx=20)
+
+        btn_refresh_quota = ttk.Button(
+            q_top,
+            text="🔄 Quét Quota Profile",
+            command=self._refresh_selected_profile_quota
+        )
+        btn_refresh_quota.pack(side=tk.RIGHT, padx=5)
+
+        btn_refresh_all_q = ttk.Button(
+            q_top,
+            text="🌐 Quét Toàn Bộ 10 Profiles",
+            command=self._refresh_all_quotas_async
+        )
+        btn_refresh_all_q.pack(side=tk.RIGHT, padx=5)
+
+        q_sub = ttk.Frame(self.quota_card)
+        q_sub.pack(fill=tk.X, pady=(3, 0))
+
+        self.lbl_quota_refresh_time = ttk.Label(
+            q_sub,
+            text="Thời gian làm mới: Đang khởi tạo...",
+            style="SubHeader.TLabel"
+        )
+        self.lbl_quota_refresh_time.pack(side=tk.LEFT, padx=5)
+
+        self.lbl_quota_source = ttk.Label(
+            q_sub,
+            text="Trạng thái: ⚪ Đang kết nối...",
+            style="SubHeader.TLabel"
+        )
+        self.lbl_quota_source.pack(side=tk.RIGHT, padx=5)
+
+        # Matrix Mapping Table: Cho phép gán từng Profile -> Dự Án cụ thể kèm Quota từng model
+        matrix_frame = ttk.LabelFrame(self.tab_launch, text="Bảng Phân Bổ Swarm Matrix & Quota AI Models (Multi-Launch)", padding=10)
         matrix_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
         help_lbl = ttk.Label(
             matrix_frame,
-            text="💡 Chọn dự án tương ứng cho từng tài khoản và tích chọn các tài khoản muốn mở đồng thời.\n"
-                 "Mỗi Profile là một phân vùng User Data Dir độc lập, cho phép đăng nhập 10 Gmail riêng biệt mà không bao giờ bị logout chéo.",
+            text="💡 Tích chọn các tài khoản để mở đồng thời. Nhấp đúp chuột vào cột Quota để Kích hoạt (Focus) cửa sổ đang chạy.\n"
+                 "Mã màu Quota: 🟢 Còn nhiều (>50%) | 🟡 Cần tiết kiệm (15-50%) | 🔴 Sắp hết (<15%). Độc lập phân vùng User Data Dir 100%.",
             font=("Segoe UI", 9, "italic")
         )
         help_lbl.pack(anchor=tk.W, pady=(0, 6))
 
-        # Matrix Treeview
-        columns = ("selected", "profile_name", "email", "assigned_project")
+        # Matrix Treeview: Bổ sung 2 cột Quota trực quan
+        columns = ("selected", "profile_name", "email", "gemini_quota", "claude_quota", "assigned_project")
         self.matrix_tree = ttk.Treeview(matrix_frame, columns=columns, show="headings", height=8)
         self.matrix_tree.heading("selected", text="Kích hoạt")
         self.matrix_tree.heading("profile_name", text="Tên Profile")
         self.matrix_tree.heading("email", text="Gmail / Email")
+        self.matrix_tree.heading("gemini_quota", text="Gemini Quota (5h / Tuần)")
+        self.matrix_tree.heading("claude_quota", text="Claude/GPT Quota (5h / Tuần)")
         self.matrix_tree.heading("assigned_project", text="Dự án gán (Double click để đổi)")
 
-        self.matrix_tree.column("selected", width=90, anchor=tk.CENTER)
-        self.matrix_tree.column("profile_name", width=180)
-        self.matrix_tree.column("email", width=220)
-        self.matrix_tree.column("assigned_project", width=250)
+        self.matrix_tree.column("selected", width=75, anchor=tk.CENTER)
+        self.matrix_tree.column("profile_name", width=155)
+        self.matrix_tree.column("email", width=195)
+        self.matrix_tree.column("gemini_quota", width=175, anchor=tk.CENTER)
+        self.matrix_tree.column("claude_quota", width=185, anchor=tk.CENTER)
+        self.matrix_tree.column("assigned_project", width=210)
 
         self.matrix_tree.pack(fill=tk.BOTH, expand=True)
         self.matrix_tree.bind("<Double-1>", self._on_matrix_double_click)
@@ -1486,13 +2256,18 @@ class SwarmManagerApp(tk.Tk):
         ttk.Button(btn_frame, text="✖ Bỏ Chọn", command=self._matrix_deselect_all).pack(side=tk.LEFT, padx=5)
         ttk.Button(
             btn_frame,
-            text="🔄 Đồng Bộ từ Antigravity",
+            text="🔄 Đồng Bộ Dự Án",
             command=lambda: self._sync_projects_from_db(silent=False)
-        ).pack(side=tk.LEFT, padx=10)
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Button(
+            btn_frame,
+            text="📊 Quét Lại Quota 10 Profiles",
+            command=self._refresh_all_quotas_async
+        ).pack(side=tk.LEFT, padx=5)
 
         btn_launch_matrix = ttk.Button(
             btn_frame,
-            text="🚀 MỞ ĐỒNG LOẠT CÁC CỬA SỔ ĐÃ CHỌN",
+            text="🚀 MỞ / FOCUS CÁC CỬA SỔ ĐÃ CHỌN",
             style="Success.TButton",
             command=self._launch_matrix
         )
@@ -1512,28 +2287,33 @@ class SwarmManagerApp(tk.Tk):
         ttk.Button(top_bar, text="✏ Sửa Profile", command=self._open_edit_profile_dialog).pack(side=tk.LEFT, padx=5)
         ttk.Button(top_bar, text="🗑 Xóa Profile", command=self._delete_profile).pack(side=tk.LEFT, padx=5)
         ttk.Button(top_bar, text="📂 Mở Thư Mục Profile", command=self._open_profile_folder).pack(side=tk.LEFT, padx=5)
-        ttk.Button(top_bar, text="⚡ Tạo Đủ 10 Profiles Gmail", command=self.generate_ten_profiles).pack(side=tk.LEFT, padx=15)
+        ttk.Button(top_bar, text="⚡ Tạo Đủ 10 Profiles Gmail", command=self.generate_ten_profiles).pack(side=tk.LEFT, padx=10)
+        ttk.Button(top_bar, text="📊 Quét Quota Toàn Bộ", command=self._refresh_all_quotas_async).pack(side=tk.LEFT, padx=5)
 
         hint_lbl = ttk.Label(
             self.tab_profiles,
             text="💡 Mỗi Profile là một phân vùng User Data Dir độc lập. Bạn có thể đăng nhập 10 tài khoản Gmail khác nhau để tối đa hóa Quota.\n"
-                 "Nhấp đúp chuột vào bất kỳ dòng nào để đổi Tên hiển thị và Gmail tương ứng.",
+                 "Nhấp đúp chuột vào bất kỳ dòng nào để đổi Tên hiển thị và Gmail tương ứng. Quota hiển thị: 5h / Hàng tuần.",
             font=("Segoe UI", 9, "italic"),
             foreground="#007acc"
         )
         hint_lbl.pack(anchor=tk.W, pady=(0, 6))
 
-        cols = ("id", "name", "email", "data_dir")
+        cols = ("id", "name", "email", "gemini_quota", "claude_quota", "data_dir")
         self.profiles_tree = ttk.Treeview(self.tab_profiles, columns=cols, show="headings")
         self.profiles_tree.heading("id", text="Mã ID")
         self.profiles_tree.heading("name", text="Tên Hiển Thị")
         self.profiles_tree.heading("email", text="Email / Ghi Chú")
+        self.profiles_tree.heading("gemini_quota", text="Gemini Quota (5h / Tuần)")
+        self.profiles_tree.heading("claude_quota", text="Claude/GPT Quota (5h / Tuần)")
         self.profiles_tree.heading("data_dir", text="Thư Mục Lưu Trữ Profile (User Data Dir)")
 
-        self.profiles_tree.column("id", width=100)
-        self.profiles_tree.column("name", width=180)
-        self.profiles_tree.column("email", width=220)
-        self.profiles_tree.column("data_dir", width=380)
+        self.profiles_tree.column("id", width=90)
+        self.profiles_tree.column("name", width=150)
+        self.profiles_tree.column("email", width=190)
+        self.profiles_tree.column("gemini_quota", width=165, anchor=tk.CENTER)
+        self.profiles_tree.column("claude_quota", width=175, anchor=tk.CENTER)
+        self.profiles_tree.column("data_dir", width=300)
 
         self.profiles_tree.pack(fill=tk.BOTH, expand=True)
         self.profiles_tree.bind("<Double-1>", lambda e: self._open_edit_profile_dialog())
@@ -1582,13 +2362,16 @@ class SwarmManagerApp(tk.Tk):
         ttk.Button(top_bar, text="🎯 Kích Hoạt / Focus Cửa Sổ", command=self._focus_selected_instance).pack(side=tk.LEFT, padx=5)
         ttk.Button(top_bar, text="🛑 Đóng Cửa Sổ Đã Chọn (Kill)", command=self._kill_selected_instance).pack(side=tk.LEFT, padx=5)
         ttk.Button(top_bar, text="💥 ĐÓNG TẤT CẢ (Kill All)", command=self._kill_all_instances).pack(side=tk.LEFT, padx=5)
+        ttk.Button(top_bar, text="📊 Quét Quota", command=self._refresh_all_quotas_async).pack(side=tk.LEFT, padx=5)
         ttk.Button(top_bar, text="🔄 Làm Mới", command=self._refresh_monitor_table).pack(side=tk.RIGHT, padx=5)
 
-        cols = ("pid", "profile", "email", "project", "data_dir", "hwnd", "status", "uptime")
+        cols = ("pid", "profile", "email", "gemini_quota", "claude_quota", "project", "data_dir", "hwnd", "status", "uptime")
         self.monitor_tree = ttk.Treeview(self.tab_monitor, columns=cols, show="headings")
         self.monitor_tree.heading("pid", text="PID")
         self.monitor_tree.heading("profile", text="Profile")
         self.monitor_tree.heading("email", text="Gmail / Email")
+        self.monitor_tree.heading("gemini_quota", text="Gemini Quota")
+        self.monitor_tree.heading("claude_quota", text="Claude/GPT Quota")
         self.monitor_tree.heading("project", text="Dự Án")
         self.monitor_tree.heading("data_dir", text="Phân Vùng User Data")
         self.monitor_tree.heading("hwnd", text="HWND Window")
@@ -1596,15 +2379,18 @@ class SwarmManagerApp(tk.Tk):
         self.monitor_tree.heading("uptime", text="Thời Gian Chạy")
 
         self.monitor_tree.column("pid", width=65, anchor=tk.CENTER)
-        self.monitor_tree.column("profile", width=135)
-        self.monitor_tree.column("email", width=175)
-        self.monitor_tree.column("project", width=145)
-        self.monitor_tree.column("data_dir", width=180)
+        self.monitor_tree.column("profile", width=125)
+        self.monitor_tree.column("email", width=165)
+        self.monitor_tree.column("gemini_quota", width=155, anchor=tk.CENTER)
+        self.monitor_tree.column("claude_quota", width=165, anchor=tk.CENTER)
+        self.monitor_tree.column("project", width=130)
+        self.monitor_tree.column("data_dir", width=160)
         self.monitor_tree.column("hwnd", width=95, anchor=tk.CENTER)
         self.monitor_tree.column("status", width=105, anchor=tk.CENTER)
-        self.monitor_tree.column("uptime", width=105, anchor=tk.CENTER)
+        self.monitor_tree.column("uptime", width=95, anchor=tk.CENTER)
 
         self.monitor_tree.pack(fill=tk.BOTH, expand=True)
+        self.monitor_tree.bind("<Double-1>", lambda e: self._focus_selected_instance())
 
     # -----------------------------------------------------------------------
     # Helper Refresh Functions
@@ -1858,7 +2644,16 @@ class SwarmManagerApp(tk.Tk):
             p_id = p.get("id", "")
             is_running = p_id in running_profile_ids
             status_icon = "🟢 Đang chạy" if is_running else "⚪ Sẵn sàng"
-            prof_names.append(f"[{status_icon}] {p['name']} ({p['email']})")
+            q = self.quota_cache.get(p_id, {})
+            g_5h = q.get("gemini_5h")
+            c_5h = q.get("claude_5h")
+            if g_5h is not None or c_5h is not None:
+                g_str = format_quota_badge(g_5h)
+                c_str = format_quota_badge(c_5h)
+                quota_part = f" | ♊ {g_str} | 🧠 {c_str}"
+            else:
+                quota_part = ""
+            prof_names.append(f"[{status_icon}] {p['name']}{quota_part} ({p['email']})")
 
         proj_names = [self._format_project_label(pr) for pr in projects]
 
@@ -1888,11 +2683,21 @@ class SwarmManagerApp(tk.Tk):
                 selected_proj_idx = 0
             self.quick_project_cb.current(selected_proj_idx)
 
+        if hasattr(self, "_on_quick_profile_change"):
+            self._on_quick_profile_change()
+
     def _refresh_profiles_table(self):
         for item in self.profiles_tree.get_children():
             self.profiles_tree.delete(item)
         for p in self.config_data.get("profiles", []):
-            self.profiles_tree.insert("", tk.END, values=(p["id"], p["name"], p["email"], p["data_dir"]))
+            pid = p["id"]
+            q = self.quota_cache.get(pid, {})
+            gemini_str = format_quota_cell(q.get("gemini_5h"), q.get("gemini_weekly"))
+            claude_str = format_quota_cell(q.get("claude_5h"), q.get("claude_weekly"))
+            self.profiles_tree.insert(
+                "", tk.END,
+                values=(p["id"], p["name"], p["email"], gemini_str, claude_str, p["data_dir"])
+            )
 
     def _refresh_projects_table(self):
         for item in self.projects_tree.get_children():
@@ -1922,7 +2727,15 @@ class SwarmManagerApp(tk.Tk):
                 assigned_name = self._format_project_label(projects_dict[assigned_proj_id])
             else:
                 assigned_name = default_label
-            self.matrix_tree.insert("", tk.END, iid=pid, values=("✔ Có", p["name"], p["email"], assigned_name))
+
+            q = self.quota_cache.get(pid, {})
+            gemini_str = format_quota_cell(q.get("gemini_5h"), q.get("gemini_weekly"))
+            claude_str = format_quota_cell(q.get("claude_5h"), q.get("claude_weekly"))
+
+            self.matrix_tree.insert(
+                "", tk.END, iid=pid,
+                values=("✔ Có", p["name"], p["email"], gemini_str, claude_str, assigned_name)
+            )
 
     def _matrix_select_all(self):
         for item in self.matrix_tree.get_children():
@@ -1953,7 +2766,34 @@ class SwarmManagerApp(tk.Tk):
                 if p["id"] == item:
                     self._show_profile_dialog(mode="edit", initial_data=p)
                     break
-        elif column == "#4":
+        elif column in ("#4", "#5"):
+            # Nhấp đúp cột Quota: Nếu profile đang chạy thì kích hoạt / focus cửa sổ ngay lập tức!
+            # Nếu chưa chạy: Mở trực tiếp profile cho dự án được gán
+            for p in self.config_data.get("profiles", []):
+                if p["id"] == item:
+                    is_run, hwnd, inst = self.find_running_for_profile(p)
+                    if is_run:
+                        focused = False
+                        if hwnd and user32.IsWindow(hwnd):
+                            bring_window_to_foreground(hwnd)
+                            focused = True
+                        elif inst and inst.get("pid"):
+                            hwnds = find_windows_for_pids(inst.get("known_pids", {inst["pid"]}))
+                            if hwnds:
+                                bring_window_to_foreground(hwnds[0][0])
+                                focused = True
+                        if focused and self.tray:
+                            self.tray.show_balloon("🎯 Đã Focus Cửa Sổ", f"Đã đưa cửa sổ '{p['name']}' lên trước màn hình.")
+                    else:
+                        assigned_proj_id = self.config_data.get("mappings", {}).get(p["id"])
+                        projects_dict = {pr["id"]: pr for pr in self.config_data.get("projects", [])}
+                        target_proj = projects_dict.get(assigned_proj_id) or (list(projects_dict.values())[0] if projects_dict else None)
+                        if target_proj:
+                            if self._check_conflicts_and_warn([(p, target_proj)]):
+                                self._execute_launch(p, target_proj)
+                        self._refresh_selected_profile_quota()
+                    break
+        elif column == "#6":
             # Chọn dự án gán
             projects = self.config_data.get("projects", [])
             if not projects:
@@ -1970,8 +2810,8 @@ class SwarmManagerApp(tk.Tk):
             ttk.Label(dlg, text=f"Chọn dự án cho: {vals[1]}", font=("Segoe UI", 9, "bold")).pack(pady=10)
             cb = ttk.Combobox(dlg, values=proj_labels, state="readonly", width=42)
             cb.pack(pady=5)
-            if vals[3] in proj_labels:
-                cb.set(vals[3])
+            if len(vals) > 5 and vals[5] in proj_labels:
+                cb.set(vals[5])
             else:
                 cb.current(0)
 
@@ -1979,7 +2819,7 @@ class SwarmManagerApp(tk.Tk):
                 sel_idx = cb.current()
                 if 0 <= sel_idx < len(projects):
                     target_pr = projects[sel_idx]
-                    vals[3] = self._format_project_label(target_pr)
+                    vals[5] = self._format_project_label(target_pr)
                     self.matrix_tree.item(item, values=vals)
                     if "mappings" not in self.config_data:
                         self.config_data["mappings"] = {}
@@ -2432,7 +3272,211 @@ class SwarmManagerApp(tk.Tk):
             messagebox.showerror("Lỗi khởi chạy", f"Không thể mở Antigravity: {e}")
             return False
 
+    def find_running_for_profile(self, profile):
+        """
+        Kiểm tra xem profile có cửa sổ hoặc tiến trình Antigravity đang hoạt động hay không.
+        Trả về (is_running, hwnd, instance_info_dict).
+        """
+        if not profile:
+            return False, 0, None
+
+        p_id = profile.get("id")
+        p_email = (profile.get("email") or "").strip().lower()
+        p_name = (profile.get("name") or "").strip().lower()
+        data_dir = os.path.normcase(os.path.realpath(os.path.expandvars(os.path.expanduser(profile.get("data_dir", ""))))) if profile.get("data_dir") else ""
+
+        # 1. Tìm trong self.running_instances
+        for inst in self.running_instances:
+            inst_prof = inst.get("profile", {})
+            if inst_prof.get("id") == p_id or (data_dir and os.path.normcase(os.path.realpath(inst_prof.get("data_dir", ""))) == data_dir):
+                proc = inst.get("proc")
+                hwnd = inst.get("hwnd", 0)
+                is_alive = (proc and proc.poll() is None) or (hwnd and user32.IsWindow(hwnd))
+                if is_alive:
+                    if not hwnd or not user32.IsWindow(hwnd):
+                        hwnds = find_windows_for_pids(inst.get("known_pids", {inst["pid"]}))
+                        if hwnds:
+                            hwnd = hwnds[0][0]
+                            inst["hwnd"] = hwnd
+                    return True, hwnd, inst
+
+        # 2. Kiểm tra DevToolsActivePort trong thư mục data_dir
+        if data_dir:
+            port_file = os.path.join(data_dir, "DevToolsActivePort")
+            if os.path.isfile(port_file):
+                try:
+                    with open(port_file, "r", encoding="utf-8") as f:
+                        lines = [l.strip() for l in f.readlines() if l.strip()]
+                    if lines and lines[0].isdigit() and is_port_listening(int(lines[0])):
+                        all_wins = find_all_antigravity_windows()
+                        for hw, pid, title in all_wins:
+                            t_low = title.lower()
+                            if (p_email and p_email in t_low) or (p_name and p_name in t_low):
+                                return True, hw, None
+                        if len(all_wins) == 1:
+                            other_running = any(
+                                inst.get("profile", {}).get("id") != p_id and inst.get("status") == "🟢 Running"
+                                for inst in self.running_instances
+                            )
+                            if not other_running:
+                                return True, all_wins[0][0], None
+                except Exception:
+                    pass
+
+        # 3. Quét tiêu đề cửa sổ trên Desktop theo từ khóa nhận diện
+        if p_email or p_name:
+            all_wins = find_all_antigravity_windows()
+            for hw, pid, title in all_wins:
+                t_low = title.lower()
+                if (p_email and p_email in t_low) or (p_name and p_name in t_low):
+                    return True, hw, None
+
+        return False, 0, None
+
+    def _show_transient_toast(self, title, message):
+        """Hiển thị thông báo nhẹ nhàng trên System Tray mà không ngắt quãng người dùng."""
+        if self.tray:
+            self.tray.show_balloon(title, message)
+
+    def _on_quick_profile_change(self, event=None):
+        self._save_current_state()
+        p_idx = self.quick_profile_cb.current()
+        profiles = self.config_data.get("profiles", [])
+        if 0 <= p_idx < len(profiles):
+            prof = profiles[p_idx]
+            self._update_quota_card(prof)
+            is_run, _, _ = self.find_running_for_profile(prof)
+            self._update_launch_focus_button_state(is_run)
+
+    def _update_launch_focus_button_state(self, is_run: bool):
+        """Cập nhật nút hành động chính giữa Focus Cửa Sổ và Mở Cửa Sổ."""
+        if hasattr(self, "btn_launch_single"):
+            if is_run:
+                self.btn_launch_single.configure(text="🎯 Focus Cửa Sổ Này", style="Accent.TButton")
+            else:
+                self.btn_launch_single.configure(text="▶ Mở Cửa Sổ Này", style="Success.TButton")
+
+    def _update_quota_card(self, profile):
+        if not profile or not hasattr(self, "lbl_gemini_quota"):
+            return
+        p_id = profile.get("id")
+        q = self.quota_cache.get(p_id)
+        if not q:
+            q = get_cached_profile_quota(profile.get("data_dir", ""))
+            if q:
+                self.quota_cache[p_id] = q
+
+        if q:
+            g_5h = q.get("gemini_5h")
+            g_w = q.get("gemini_weekly")
+            c_5h = q.get("claude_5h")
+            c_w = q.get("claude_weekly")
+
+            g_text = f"Gemini Models:  5 Giờ: {format_quota_badge(g_5h)}  |  Hàng Tuần: {format_quota_badge(g_w)}"
+            c_text = f"Claude & GPT:   5 Giờ: {format_quota_badge(c_5h)}  |  Hàng Tuần: {format_quota_badge(c_w)}"
+
+            self.lbl_gemini_quota.configure(text=g_text)
+            self.lbl_claude_quota.configure(text=c_text)
+
+            r_parts = []
+            if q.get("gemini_5h_refresh"):
+                r_parts.append(f"Gemini 5h: {q['gemini_5h_refresh']}")
+            if q.get("gemini_weekly_refresh"):
+                r_parts.append(f"Gemini tuần: {q['gemini_weekly_refresh']}")
+            if q.get("claude_5h_refresh"):
+                r_parts.append(f"Claude 5h: {q['claude_5h_refresh']}")
+            if q.get("claude_weekly_refresh"):
+                r_parts.append(f"Claude tuần: {q['claude_weekly_refresh']}")
+
+            ref_str = " | ".join(r_parts) if r_parts else "Đang theo dõi chu kỳ hồi quota"
+            self.lbl_quota_refresh_time.configure(text=f"Thời gian làm mới: {ref_str}")
+
+            ts_str = time.strftime('%H:%M:%S', time.localtime(q.get("timestamp", time.time())))
+            src_str = q.get("source", "Đã lưu")
+            self.lbl_quota_source.configure(text=f"Trạng thái: 🟢 Đã đồng bộ ({src_str} lúc {ts_str})")
+        else:
+            self.lbl_gemini_quota.configure(text="Gemini Models:  5 Giờ: ⚪ --%  |  Hàng Tuần: ⚪ --%")
+            self.lbl_claude_quota.configure(text="Claude & GPT:   5 Giờ: ⚪ --%  |  Hàng Tuần: ⚪ --%")
+            self.lbl_quota_refresh_time.configure(text="Thời gian làm mới: Chưa có dữ liệu")
+            self.lbl_quota_source.configure(text="Trạng thái: ⚪ Chưa đồng bộ (Nhấn 'Quét Quota' để lấy)")
+
+    def _refresh_selected_profile_quota(self):
+        p_idx = self.quick_profile_cb.current()
+        profiles = self.config_data.get("profiles", [])
+        if 0 <= p_idx < len(profiles):
+            prof = profiles[p_idx]
+            if hasattr(self, "lbl_quota_source"):
+                self.lbl_quota_source.configure(text="Trạng thái: 🟡 Đang quét Quota từ CDP & Storage...")
+            def _worker():
+                q = get_profile_quota(prof)
+                if q:
+                    self.quota_cache[prof["id"]] = q
+                self.after(0, lambda: self._on_quota_refreshed(prof))
+            threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_quota_refreshed(self, prof):
+        self._update_quota_card(prof)
+        self._refresh_matrix_table()
+        self._refresh_profiles_table()
+        self._refresh_monitor_table()
+
+    def _refresh_all_quotas_async(self):
+        profiles = self.config_data.get("profiles", [])
+        if not profiles:
+            return
+        if hasattr(self, "lbl_quota_source"):
+            self.lbl_quota_source.configure(text="Trạng thái: 🟡 Đang quét Quota tất cả 10 profiles...")
+        def _worker():
+            for p in profiles:
+                q = get_profile_quota(p)
+                if q:
+                    self.quota_cache[p["id"]] = q
+                time.sleep(0.08)
+            self.after(0, self._on_all_quotas_refreshed)
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_all_quotas_refreshed(self):
+        p_idx = self.quick_profile_cb.current()
+        profiles = self.config_data.get("profiles", [])
+        if 0 <= p_idx < len(profiles):
+            self._update_quota_card(profiles[p_idx])
+        self._refresh_matrix_table()
+        self._refresh_profiles_table()
+        self._refresh_monitor_table()
+
+    def _start_quota_monitor_timer(self):
+        """Timer ngầm tự động quét quota định kỳ mỗi 8s cho các instance đang chạy."""
+        def _scan_running_quotas():
+            updated = False
+            for inst in list(self.running_instances):
+                if inst.get("status") == "🟢 Running":
+                    prof = inst.get("profile", {})
+                    q = get_profile_quota(prof)
+                    if q:
+                        old_q = self.quota_cache.get(prof.get("id"))
+                        self.quota_cache[prof.get("id")] = q
+                        if not old_q or old_q.get("gemini_5h") != q.get("gemini_5h") or old_q.get("claude_5h") != q.get("claude_5h"):
+                            updated = True
+            if updated:
+                self.after(0, self._refresh_tables_quota_only)
+
+        threading.Thread(target=_scan_running_quotas, daemon=True).start()
+        self.after(8000, self._start_quota_monitor_timer)
+
+    def _refresh_tables_quota_only(self):
+        p_idx = self.quick_profile_cb.current()
+        profiles = self.config_data.get("profiles", [])
+        if 0 <= p_idx < len(profiles):
+            self._update_quota_card(profiles[p_idx])
+        self._refresh_matrix_table()
+        self._refresh_monitor_table()
+
     def _launch_single_selected(self):
+        """
+        [P0 - Smart Launch / Focus]:
+        - Nếu Profile ĐÃ ĐANG CHẠY: Lập tức Focus / đưa cửa sổ lên trước màn hình mà KHÔNG hiện popup chặn.
+        - Nếu Profile CHƯA CHẠY: Khởi chạy Antigravity độc lập cho Profile và Dự Án này.
+        """
         p_idx = self.quick_profile_cb.current()
         pr_idx = self.quick_project_cb.current()
         profiles = self.config_data.get("profiles", [])
@@ -2448,6 +3492,38 @@ class SwarmManagerApp(tk.Tk):
         target_profile = profiles[p_idx]
         target_project = projects[pr_idx]
 
+        # 1. Kiểm tra xem Profile này đã ĐANG CHẠY hay chưa
+        is_running, hwnd, inst = self.find_running_for_profile(target_profile)
+        if is_running:
+            focused = False
+            if hwnd and user32.IsWindow(hwnd):
+                bring_window_to_foreground(hwnd)
+                focused = True
+            elif inst and inst.get("pid"):
+                hwnds = find_windows_for_pids(inst.get("known_pids", {inst["pid"]}))
+                if hwnds:
+                    inst["hwnd"] = hwnds[0][0]
+                    bring_window_to_foreground(hwnds[0][0])
+                    focused = True
+
+            if not focused:
+                p_email = (target_profile.get("email") or "").strip().lower()
+                p_name = (target_profile.get("name") or "").strip().lower()
+                for hw, pid, title in find_all_antigravity_windows():
+                    t_low = title.lower()
+                    if (p_email and p_email in t_low) or (p_name and p_name in t_low):
+                        bring_window_to_foreground(hw)
+                        focused = True
+                        break
+
+            if focused:
+                self._show_transient_toast(
+                    "🎯 Đã Focus Cửa Sổ Antigravity",
+                    f"Đã kích hoạt cửa sổ của [{target_profile['name']}] lên trước màn hình!"
+                )
+                return
+
+        # 2. Nếu Profile chưa chạy: Kiểm tra cảnh báo dự án trùng (nếu có) rồi khởi chạy
         if not self._check_conflicts_and_warn([(target_profile, target_project)]):
             return
 
@@ -2466,23 +3542,24 @@ class SwarmManagerApp(tk.Tk):
                     self.quick_profile_cb.current(next_idx)
                     self.config_data["last_profile_id"] = p["id"]
                     save_config(self.config_data)
+                    self._on_quick_profile_change()
                     break
             self.notebook.select(self.tab_monitor)
 
     def _launch_matrix(self):
-        """Khởi chạy đồng loạt tất cả các cặp đã được chọn trong bảng Matrix."""
+        """Khởi chạy đồng loạt tất cả các cặp đã được chọn trong bảng Matrix (Smart Focus / Launch)."""
         profiles = {p["id"]: p for p in self.config_data.get("profiles", [])}
         projects_by_id = {pr["id"]: pr for pr in self.config_data.get("projects", [])}
         projects_by_name = {pr["name"]: pr for pr in self.config_data.get("projects", [])}
         projects_by_label = {self._format_project_label(pr): pr for pr in self.config_data.get("projects", [])}
         mappings = self.config_data.get("mappings", {})
 
-        launch_pairs = []
+        selected_pairs = []
         for item in self.matrix_tree.get_children():
             vals = self.matrix_tree.item(item, "values")
             if vals[0] == "✔ Có":
                 prof_id = item
-                assigned_proj_label = vals[3]
+                assigned_proj_label = vals[5]
                 target_project = None
                 if prof_id in mappings and mappings[prof_id] in projects_by_id:
                     target_project = projects_by_id[mappings[prof_id]]
@@ -2491,7 +3568,6 @@ class SwarmManagerApp(tk.Tk):
                 elif assigned_proj_label in projects_by_name:
                     target_project = projects_by_name[assigned_proj_label]
                 else:
-                    # Bóc tách tên dự án gốc loại bỏ phần phụ lục (X convs - ...)
                     clean_name = re.sub(r"\s*\(\d+\s*convs.*?\)$", "", assigned_proj_label).strip()
                     if clean_name in projects_by_name:
                         target_project = projects_by_name[clean_name]
@@ -2499,29 +3575,50 @@ class SwarmManagerApp(tk.Tk):
                         target_project = next(iter(projects_by_id.values()))
 
                 if prof_id in profiles and target_project:
-                    launch_pairs.append((profiles[prof_id], target_project))
+                    selected_pairs.append((profiles[prof_id], target_project))
 
-        if not launch_pairs:
+        if not selected_pairs:
             messagebox.showwarning("Cảnh báo", "Chưa có tài khoản nào được chọn để mở (cột 'Kích hoạt' là '✔ Có').")
             return
 
-        # Kiểm tra xung đột trước khi mở (bao gồm cả các cửa sổ đang chạy)
-        if not self._check_conflicts_and_warn(launch_pairs):
-            return
+        to_launch = []
+        focused_count = 0
+        for prof, proj in selected_pairs:
+            is_running, hwnd, inst = self.find_running_for_profile(prof)
+            if is_running:
+                if hwnd and user32.IsWindow(hwnd):
+                    bring_window_to_foreground(hwnd)
+                    focused_count += 1
+                elif inst and inst.get("pid"):
+                    hwnds = find_windows_for_pids(inst.get("known_pids", {inst["pid"]}))
+                    if hwnds:
+                        inst["hwnd"] = hwnds[0][0]
+                        bring_window_to_foreground(hwnds[0][0])
+                        focused_count += 1
+            else:
+                to_launch.append((prof, proj))
 
         success_count = 0
-        for prof, proj in launch_pairs:
-            if self._execute_launch(prof, proj):
-                success_count += 1
-                time.sleep(1.0) # Nghỉ nhẹ giữa các lần mở để tránh nghẽn I/O
+        if to_launch:
+            if not self._check_conflicts_and_warn(to_launch):
+                return
+            for prof, proj in to_launch:
+                if self._execute_launch(prof, proj):
+                    success_count += 1
+                    time.sleep(0.8)
 
         self._refresh_comboboxes()
-        messagebox.showinfo(
-            "Hoàn tất mở Swarm",
-            f"Đã khởi chạy thành công {success_count}/{len(launch_pairs)} cửa sổ Antigravity!\n"
-            "Mỗi cửa sổ hoạt động trên một phân vùng User Data Dir hoàn toàn độc lập.\n"
-            "Các cửa sổ đang được gắn nhãn định danh [Gmail: ...] trên Taskbar."
-        )
+        self._refresh_matrix_table()
+
+        summary_msg = []
+        if focused_count > 0:
+            summary_msg.append(f"• 🎯 Đã kích hoạt (Focus) {focused_count} cửa sổ Antigravity đang hoạt động.")
+        if success_count > 0:
+            summary_msg.append(f"• 🚀 Đã khởi chạy mới {success_count} cửa sổ Antigravity độc lập.")
+        if not summary_msg:
+            summary_msg.append("Không có cửa sổ nào cần xử lý.")
+
+        messagebox.showinfo("Hoàn Tất Swarm Matrix", "\n".join(summary_msg))
         self.notebook.select(self.tab_monitor)
 
     # -----------------------------------------------------------------------
@@ -2562,10 +3659,17 @@ class SwarmManagerApp(tk.Tk):
             short_dir = os.path.basename(os.path.normpath(raw_dir))
             display_dir = f"...\\{short_dir}" if short_dir else raw_dir
 
+            p_id = inst["profile"].get("id")
+            q = self.quota_cache.get(p_id, {})
+            gemini_str = format_quota_cell(q.get("gemini_5h"), q.get("gemini_weekly"))
+            claude_str = format_quota_cell(q.get("claude_5h"), q.get("claude_weekly"))
+
             row_vals = (
                 inst["pid"],
                 inst["profile"]["name"],
                 inst["profile"]["email"],
+                gemini_str,
+                claude_str,
                 inst["project"]["name"],
                 display_dir,
                 hwnd_str,
@@ -2594,10 +3698,14 @@ class SwarmManagerApp(tk.Tk):
             if inst["pid"] == pid:
                 hwnd = inst.get("hwnd", 0)
                 if hwnd and user32.IsWindow(hwnd):
-                    user32.ShowWindow(hwnd, 9) # SW_RESTORE
-                    user32.SetForegroundWindow(hwnd)
+                    bring_window_to_foreground(hwnd)
                 else:
-                    messagebox.showinfo("Thông báo", "Chưa tìm thấy HWND của cửa sổ này (có thể đang khởi động hoặc đã đóng).")
+                    hwnds = find_windows_for_pids(inst.get("known_pids", {inst["pid"]}))
+                    if hwnds:
+                        inst["hwnd"] = hwnds[0][0]
+                        bring_window_to_foreground(hwnds[0][0])
+                    else:
+                        messagebox.showinfo("Thông báo", "Chưa tìm thấy HWND của cửa sổ này (có thể đang khởi động hoặc đã đóng).")
                 break
 
     def _kill_selected_instance(self):
