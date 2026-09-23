@@ -2,22 +2,28 @@
     "antigravity_path": "C:\\Users\\maing\\AppData\\Local\\Programs\\Antigravity\\Antigravity.exe",
     "profiles": [
         {
-            "id": "profile_1",
-            "name": "Tài khoản Chính (Main)",
-            "email": "thanhthienz22016@gmail.com",
-            "data_dir": "C:\\Users\\maing\\AppData\\Roaming\\Antigravity_Profiles\\profile_main"
-        },
-        {
-            "id": "profile_2",
-            "name": "Tài khoản Phụ 1 (Dev)",
+            "id": "profile_dev1",
+            "name": "Tài khoản Mai Nguyễn (Dev 1)",
             "email": "mainguyenz22016@gmail.com",
             "data_dir": "C:\\Users\\maing\\AppData\\Roaming\\Antigravity_Profiles\\profile_dev1"
         },
         {
-            "id": "profile_1790094190",
-            "name": "Tài khoản Phụ 2 (Dev)",
+            "id": "profile_clean1",
+            "name": "Tài khoản Mới 1 (Sạch)",
+            "email": "(Chờ đăng nhập)",
+            "data_dir": "C:\\Users\\maing\\AppData\\Roaming\\Antigravity_Profiles\\Profile_1"
+        },
+        {
+            "id": "profile_clean2",
+            "name": "Tài khoản Mới 2 (Sạch)",
+            "email": "(Chờ đăng nhập)",
+            "data_dir": "C:\\Users\\maing\\AppData\\Roaming\\Antigravity_Profiles\\Profile_2"
+        },
+        {
+            "id": "profile_default",
+            "name": "Tài khoản Mặc Định (Thanh Thiện)",
             "email": "thanhthienz22020@gmail.com",
-            "data_dir": "C:\\Users\\maing\\AppData\\Roaming\\Antigravity_Profiles\\profile_dev3"
+            "data_dir": "C:\\Users\\maing\\AppData\\Roaming\\Antigravity"
         }
     ],
     "projects": [
@@ -39,7 +45,7 @@
             "id": "proj_timioffice",
             "name": "Timioffice",
             "path": "Z:\\home\\thanhthien\\projects\\timioffice",
-            "conv_count": 41,
+            "conv_count": 44,
             "latest_title": "Start DDEV Project"
         },
         {

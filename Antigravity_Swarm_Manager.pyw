@@ -644,6 +644,97 @@ def kill_process_tree(pid, hwnd=None, extra_pids=None):
 
 
 # ---------------------------------------------------------------------------
+# Quản lý Phiên Đăng Nhập & Cô Lập Dữ Liệu Profile (Profile Auth & Isolation)
+# ---------------------------------------------------------------------------
+def get_profile_real_status(data_dir):
+    """
+    Kiểm tra trạng thái xác thực và email thực tế lưu trong thư mục User Data Dir của Profile.
+    Trả về: (real_email, status_display)
+    Ví dụ:
+      ('mainguyenz22016@gmail.com', '🟢 Đã đăng nhập')
+      ('', '⚪ Chưa đăng nhập (Sạch 100%)')
+    """
+    if not data_dir:
+        return "", "⚪ Thư mục rỗng"
+    data_dir_expanded = os.path.expandvars(os.path.expanduser(data_dir))
+    if not os.path.exists(data_dir_expanded):
+        return "", "⚪ Thư mục mới (Chưa khởi tạo)"
+
+    app_storage = os.path.join(data_dir_expanded, "app_storage.json")
+    if os.path.isfile(app_storage):
+        try:
+            with open(app_storage, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                email = data.get("jetski.onboarding.lastLoginUsername", "").strip()
+                if email and "@" in email:
+                    return email, "🟢 Đã đăng nhập"
+                else:
+                    return "", "⚪ Chưa đăng nhập (Sạch 100%)"
+        except Exception:
+            pass
+
+    return "", "⚪ Chưa đăng nhập (Sạch 100%)"
+
+
+def wipe_profile_auth(data_dir):
+    """
+    Xóa sạch phiên đăng nhập (Cookies, Local Storage, app_storage, Session Storage)
+    của MỘT Profile cụ thể mà TUYỆT ĐỐI KHÔNG ảnh hưởng các profile khác.
+    Đưa Profile về trạng thái SẠCH 100% để đăng nhập Gmail mới.
+    """
+    if not data_dir:
+        return False, "Đường dẫn thư mục profile không hợp lệ."
+    data_dir_expanded = os.path.expandvars(os.path.expanduser(data_dir))
+    if not os.path.exists(data_dir_expanded):
+        return True, "Thư mục profile không tồn tại (đã sạch sẵn)."
+
+    errors = []
+    # 1. Làm sạch app_storage.json (xóa trường login, giữ cấu hình UI cơ bản nếu có)
+    app_storage = os.path.join(data_dir_expanded, "app_storage.json")
+    if os.path.isfile(app_storage):
+        try:
+            with open(app_storage, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for k in ["jetski.onboarding.lastLoginUsername", "jetski.onboarding.lastLoginIsGcpTos"]:
+                data.pop(k, None)
+            with open(app_storage, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            try:
+                os.remove(app_storage)
+            except Exception as e:
+                errors.append(f"app_storage.json: {e}")
+
+    # 2. Xóa các thư mục/file session cookies và token lưu trữ
+    targets_to_remove = [
+        os.path.join(data_dir_expanded, "Network"),
+        os.path.join(data_dir_expanded, "Local Storage"),
+        os.path.join(data_dir_expanded, "Session Storage"),
+        os.path.join(data_dir_expanded, "SharedStorage"),
+        os.path.join(data_dir_expanded, "SharedStorage-wal"),
+        os.path.join(data_dir_expanded, "DIPS"),
+        os.path.join(data_dir_expanded, "DIPS-wal"),
+        os.path.join(data_dir_expanded, "lockfile")
+    ]
+    for target in targets_to_remove:
+        if os.path.isfile(target):
+            try:
+                os.remove(target)
+            except Exception as e:
+                errors.append(f"{os.path.basename(target)}: {e}")
+        elif os.path.isdir(target):
+            try:
+                shutil.rmtree(target, ignore_errors=True)
+            except Exception as e:
+                errors.append(f"{os.path.basename(target)}: {e}")
+
+    if errors:
+        return False, "Một số file chưa thể xóa (vui lòng đảm bảo Antigravity đã đóng hoàn toàn):\n" + "\n".join(errors)
+    return True, "Đã làm sạch phiên đăng nhập thành công."
+
+
+
+# ---------------------------------------------------------------------------
 # Cấu hình & Dữ liệu Vĩnh Viễn (Config & Persistence)
 # ---------------------------------------------------------------------------
 CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Antigravity_Swarm_Manager")
@@ -1059,20 +1150,32 @@ class WindowTitleHook(threading.Thread):
     Theo dõi tiến trình Antigravity và đảm bảo tiêu đề cửa sổ luôn mang định dạng:
     [Gmail: <Tên/Email>] - <Tên Dự Án> - Antigravity
     """
-    def __init__(self, root_pid, tag_label, project_name, instance_tracker):
+    def __init__(self, root_pid, tag_label, project_name, instance_tracker, profile_dir=None):
         super().__init__(daemon=True)
         self.root_pid = root_pid
         self.tag_label = tag_label
         self.project_name = project_name
         self.instance_tracker = instance_tracker
+        self.profile_dir = profile_dir
         self.stop_event = threading.Event()
         self.target_prefix = f"[Gmail: {self.tag_label}]"
         self.known_pids = {root_pid}
+        self.last_email_check = 0
 
     def run(self):
         consecutive_missing = 0
 
         while not self.stop_event.is_set():
+            # Kiểm tra xem người dùng có vừa đăng nhập Gmail mới trong profile không
+            if self.profile_dir and (time.time() - self.last_email_check > 4.0):
+                self.last_email_check = time.time()
+                real_email, _ = get_profile_real_status(self.profile_dir)
+                if real_email and real_email != self.tag_label and "@" in real_email:
+                    self.tag_label = real_email
+                    self.target_prefix = f"[Gmail: {self.tag_label}]"
+                    if self.instance_tracker and "profile" in self.instance_tracker:
+                        self.instance_tracker["profile"]["email"] = real_email
+
             # Cập nhật và tích lũy các PID con của cây tiến trình
             new_pids = get_child_pids(self.root_pid)
             self.known_pids.update(new_pids)
@@ -1450,18 +1553,22 @@ class SwarmManagerApp(tk.Tk):
         ttk.Button(top_bar, text="➕ Thêm Gmail Mới", command=self._open_add_profile_dialog).pack(side=tk.LEFT, padx=5)
         ttk.Button(top_bar, text="✏ Sửa Profile", command=self._open_edit_profile_dialog).pack(side=tk.LEFT, padx=5)
         ttk.Button(top_bar, text="🗑 Xóa Profile", command=self._delete_profile).pack(side=tk.LEFT, padx=5)
+        ttk.Button(top_bar, text="🔓 Đăng Xuất Gmail (Làm Sạch)", command=self._logout_selected_profile).pack(side=tk.LEFT, padx=8)
+        ttk.Button(top_bar, text="🔄 Đồng Bộ Email Thực Tế", command=self._sync_all_real_emails).pack(side=tk.LEFT, padx=5)
 
-        cols = ("id", "name", "email", "data_dir")
+        cols = ("id", "name", "email", "real_status", "data_dir")
         self.profiles_tree = ttk.Treeview(self.tab_profiles, columns=cols, show="headings")
         self.profiles_tree.heading("id", text="Mã ID")
-        self.profiles_tree.heading("name", text="Tên Hiển Thị")
-        self.profiles_tree.heading("email", text="Email / Ghi Chú")
+        self.profiles_tree.heading("name", text="Tên Profile")
+        self.profiles_tree.heading("email", text="Email Ghi Chú")
+        self.profiles_tree.heading("real_status", text="Trạng Thái Gmail Thực Tế (Trên Ổ Đĩa)")
         self.profiles_tree.heading("data_dir", text="Thư Mục Lưu Trữ Profile (User Data Dir)")
 
-        self.profiles_tree.column("id", width=100)
-        self.profiles_tree.column("name", width=180)
-        self.profiles_tree.column("email", width=220)
-        self.profiles_tree.column("data_dir", width=380)
+        self.profiles_tree.column("id", width=90)
+        self.profiles_tree.column("name", width=150)
+        self.profiles_tree.column("email", width=170)
+        self.profiles_tree.column("real_status", width=220)
+        self.profiles_tree.column("data_dir", width=330)
 
         self.profiles_tree.pack(fill=tk.BOTH, expand=True)
         self._refresh_profiles_table()
@@ -1698,7 +1805,12 @@ class SwarmManagerApp(tk.Tk):
         profiles = self.config_data.get("profiles", [])
         projects = self.config_data.get("projects", [])
 
-        prof_names = [f"{p['name']} ({p['email']})" for p in profiles]
+        prof_names = []
+        for p in profiles:
+            real_email, status_str = get_profile_real_status(p.get("data_dir", ""))
+            tag = f"🟢 {real_email}" if real_email else status_str
+            prof_names.append(f"{p['name']} [{tag}]")
+
         proj_names = [self._format_project_label(pr) for pr in projects]
 
         self.quick_profile_cb["values"] = prof_names
@@ -1731,7 +1843,9 @@ class SwarmManagerApp(tk.Tk):
         for item in self.profiles_tree.get_children():
             self.profiles_tree.delete(item)
         for p in self.config_data.get("profiles", []):
-            self.profiles_tree.insert("", tk.END, values=(p["id"], p["name"], p["email"], p["data_dir"]))
+            real_email, status_str = get_profile_real_status(p.get("data_dir", ""))
+            tag = f"🟢 {real_email}" if real_email else status_str
+            self.profiles_tree.insert("", tk.END, values=(p["id"], p["name"], p["email"], tag, p["data_dir"]))
 
     def _refresh_projects_table(self):
         for item in self.projects_tree.get_children():
@@ -1834,18 +1948,19 @@ class SwarmManagerApp(tk.Tk):
             messagebox.showwarning("Cảnh báo", "Vui lòng chọn 1 Profile trong danh sách để sửa.")
             return
         item_vals = self.profiles_tree.item(selected[0], "values")
+        p_dir = item_vals[4] if len(item_vals) >= 5 else item_vals[3]
         profile_data = {
             "id": item_vals[0],
             "name": item_vals[1],
             "email": item_vals[2],
-            "data_dir": item_vals[3]
+            "data_dir": p_dir
         }
         self._show_profile_dialog(mode="edit", initial_data=profile_data)
 
     def _show_profile_dialog(self, mode="add", initial_data=None):
         dlg = tk.Toplevel(self)
         dlg.title("➕ Thêm Gmail Profile Mới" if mode == "add" else "✏ Chỉnh Sửa Profile")
-        dlg.geometry("520x280")
+        dlg.geometry("540x300")
         dlg.transient(self)
         dlg.grab_set()
 
@@ -1853,17 +1968,17 @@ class SwarmManagerApp(tk.Tk):
         grid.pack(fill=tk.BOTH, expand=True)
 
         ttk.Label(grid, text="Tên Hiển Thị:").grid(row=0, column=0, sticky=tk.W, pady=6)
-        name_ent = ttk.Entry(grid, width=40)
+        name_ent = ttk.Entry(grid, width=42)
         name_ent.grid(row=0, column=1, sticky=tk.W, pady=6)
 
         ttk.Label(grid, text="Email / Ghi Chú:").grid(row=1, column=0, sticky=tk.W, pady=6)
-        email_ent = ttk.Entry(grid, width=40)
+        email_ent = ttk.Entry(grid, width=42)
         email_ent.grid(row=1, column=1, sticky=tk.W, pady=6)
 
         ttk.Label(grid, text="Thư Mục Profile:").grid(row=2, column=0, sticky=tk.W, pady=6)
         dir_frame = ttk.Frame(grid)
         dir_frame.grid(row=2, column=1, sticky=tk.W, pady=6)
-        dir_ent = ttk.Entry(dir_frame, width=32)
+        dir_ent = ttk.Entry(dir_frame, width=34)
         dir_ent.pack(side=tk.LEFT)
 
         def browse_dir():
@@ -1879,11 +1994,12 @@ class SwarmManagerApp(tk.Tk):
             email_ent.insert(0, initial_data["email"])
             dir_ent.insert(0, initial_data["data_dir"])
         else:
-            # Gợi ý tự động
+            # Gợi ý tự động thư mục mới hoàn toàn
             count = len(self.config_data.get("profiles", [])) + 1
             name_ent.insert(0, f"Gmail Dev {count}")
-            email_ent.insert(0, f"account{count}@gmail.com")
-            def_base = os.path.join(os.environ.get("APPDATA", ""), "Antigravity_Profiles", f"profile_dev{count}")
+            email_ent.insert(0, "(Chờ đăng nhập)")
+            unique_name = f"profile_dev{count}_{int(time.time())}"
+            def_base = os.path.join(os.environ.get("APPDATA", ""), "Antigravity_Profiles", unique_name)
             dir_ent.insert(0, def_base)
 
         def save_profile():
@@ -1899,9 +2015,22 @@ class SwarmManagerApp(tk.Tk):
                 return
 
             if mode == "add":
+                os.makedirs(os.path.expandvars(os.path.expanduser(data_dir)), exist_ok=True)
                 new_id = f"profile_{int(time.time())}"
                 new_item = {"id": new_id, "name": name, "email": email, "data_dir": data_dir}
                 self.config_data.setdefault("profiles", []).append(new_item)
+                save_config(self.config_data)
+                self._refresh_profiles_table()
+                self._refresh_comboboxes()
+                self._refresh_matrix_table()
+                dlg.destroy()
+                messagebox.showinfo(
+                    "Tạo Profile Thành Công",
+                    f"Đã tạo Profile mới '{name}' ở trạng thái SẠCH 100%!\n\n"
+                    f"• Thư mục lưu trữ: {data_dir}\n\n"
+                    f"Khi bạn mở Profile này, Antigravity sẽ KHÔNG đăng nhập sẵn tài khoản nào. "
+                    f"Bạn chỉ việc đăng nhập tài khoản Gmail mong muốn."
+                )
             else:
                 p_id = initial_data["id"]
                 for p in self.config_data.get("profiles", []):
@@ -1910,12 +2039,11 @@ class SwarmManagerApp(tk.Tk):
                         p["email"] = email
                         p["data_dir"] = data_dir
                         break
-
-            save_config(self.config_data)
-            self._refresh_profiles_table()
-            self._refresh_comboboxes()
-            self._refresh_matrix_table()
-            dlg.destroy()
+                save_config(self.config_data)
+                self._refresh_profiles_table()
+                self._refresh_comboboxes()
+                self._refresh_matrix_table()
+                dlg.destroy()
 
         btn_box = ttk.Frame(grid)
         btn_box.grid(row=3, column=0, columnspan=2, pady=15)
@@ -1936,6 +2064,86 @@ class SwarmManagerApp(tk.Tk):
             self._refresh_profiles_table()
             self._refresh_comboboxes()
             self._refresh_matrix_table()
+
+    def _logout_selected_profile(self):
+        """Xóa sạch phiên đăng nhập của 1 Profile được chọn, đưa về trạng thái sạch 100%."""
+        selected = self.profiles_tree.selection()
+        if not selected:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn 1 Profile trong danh sách để đăng xuất.")
+            return
+
+        item_vals = self.profiles_tree.item(selected[0], "values")
+        p_id = item_vals[0]
+        p_name = item_vals[1]
+        p_dir = item_vals[4] if len(item_vals) >= 5 else item_vals[3]
+
+        # Kiểm tra xem Profile này có đang chạy không
+        for inst in self.running_instances:
+            inst_pdir = os.path.normpath(os.path.expandvars(os.path.expanduser(inst.get("profile", {}).get("data_dir", ""))))
+            if inst_pdir and inst_pdir == os.path.normpath(os.path.expandvars(os.path.expanduser(p_dir))):
+                proc = inst.get("proc")
+                hwnd = inst.get("hwnd", 0)
+                if (proc and proc.poll() is None) or (hwnd and user32.IsWindow(hwnd)):
+                    res = messagebox.askyesno(
+                        "Cảnh báo tiến trình đang chạy",
+                        f"Cửa sổ Antigravity của Profile '{p_name}' (PID {inst.get('pid')}) đang mở!\n\n"
+                        f"Để làm sạch phiên đăng nhập triệt để, cửa sổ này cần được đóng lại.\n"
+                        f"Bạn có muốn đóng cửa sổ này ngay bây giờ không?"
+                    )
+                    if res:
+                        kill_process_tree(inst.get("pid"), hwnd)
+                        time.sleep(1.0)
+                    else:
+                        return
+
+        confirm = messagebox.askyesno(
+            "Xác nhận Đăng Xuất Gmail",
+            f"Bạn có chắc chắn muốn đăng xuất tài khoản Gmail khỏi Profile:\n'{p_name}'?\n\n"
+            f"• Toàn bộ phiên đăng nhập, cookies và token của riêng Profile này sẽ được xóa sạch.\n"
+            f"• Lần tới khi mở, Antigravity sẽ ở trạng thái SẠCH 100% để bạn đăng nhập Gmail mới.\n"
+            f"• TUYỆT ĐỐI KHÔNG ảnh hưởng đến các Profile khác hay các dự án của bạn.\n\n"
+            f"Bạn có muốn tiếp tục không?"
+        )
+        if not confirm:
+            return
+
+        ok, msg = wipe_profile_auth(os.path.expandvars(os.path.expanduser(p_dir)))
+        if ok:
+            for p in self.config_data.get("profiles", []):
+                if p["id"] == p_id:
+                    p["email"] = "(Chờ đăng nhập)"
+                    break
+            save_config(self.config_data)
+            self._refresh_profiles_table()
+            self._refresh_comboboxes()
+            self._refresh_matrix_table()
+            messagebox.showinfo(
+                "Đăng Xuất Thành Công",
+                f"✅ Đã làm sạch phiên đăng nhập của Profile '{p_name}' thành công!\n\n"
+                f"Lần tới khi bạn mở Profile này, Antigravity sẽ yêu cầu đăng nhập Gmail mới."
+            )
+        else:
+            messagebox.showerror("Lỗi làm sạch Profile", msg)
+
+    def _sync_all_real_emails(self):
+        """Quét và đồng bộ email thực tế từ app_storage.json của tất cả profile trên đĩa."""
+        updated = 0
+        for p in self.config_data.get("profiles", []):
+            data_dir = os.path.expandvars(os.path.expanduser(p.get("data_dir", "")))
+            real_email, _ = get_profile_real_status(data_dir)
+            if real_email and p.get("email") != real_email:
+                p["email"] = real_email
+                updated += 1
+
+        save_config(self.config_data)
+        self._refresh_profiles_table()
+        self._refresh_comboboxes()
+        self._refresh_matrix_table()
+        messagebox.showinfo(
+            "Đồng Bộ Hoàn Tất",
+            f"✅ Đã đồng bộ trạng thái thực tế từ ổ đĩa!\n"
+            f"Số profile được cập nhật email: {updated}."
+        )
 
     # -----------------------------------------------------------------------
     # MODAL: THÊM / SỬA DỰ ÁN
@@ -2099,11 +2307,31 @@ class SwarmManagerApp(tk.Tk):
         os.makedirs(profile_dir, exist_ok=True)
         proj_path = os.path.expandvars(os.path.expanduser(project["path"]))
 
-        # Lệnh khởi chạy: --user-data-dir riêng biệt, tự động bật remote debugging port cho Auto-Submit
+        # Kiểm tra xem Profile này đã có cửa sổ nào đang chạy chưa
+        for inst in self.running_instances:
+            inst_pdir = os.path.normpath(os.path.expandvars(os.path.expanduser(inst.get("profile", {}).get("data_dir", ""))))
+            if inst_pdir and inst_pdir == os.path.normpath(profile_dir):
+                hwnd = inst.get("hwnd", 0)
+                proc = inst.get("proc")
+                if (proc and proc.poll() is None) or (hwnd and user32.IsWindow(hwnd)):
+                    if hwnd and user32.IsWindow(hwnd):
+                        user32.ShowWindow(hwnd, 9) # SW_RESTORE
+                        user32.SetForegroundWindow(hwnd)
+                    messagebox.showinfo(
+                        "Profile Đang Chạy",
+                        f"Profile '{profile['name']}' đang được mở tại PID {inst.get('pid')}!\n\n"
+                        f"Đã tự động chuyển tiêu điểm (Focus) tới cửa sổ đang chạy."
+                    )
+                    return True
+
+        # Lệnh khởi chạy: --user-data-dir riêng biệt, chống chia sẻ GAIA identity, bật remote debugging
         cmd = [
             exe_path,
             f"--user-data-dir={profile_dir}",
-            "--remote-debugging-port=0"
+            "--remote-debugging-port=0",
+            "--disable-features=GaiaManagerSharedIdentity",
+            "--no-first-run",
+            "--no-default-browser-check"
         ]
         if proj_path:
             cmd.append(proj_path)
@@ -2124,9 +2352,10 @@ class SwarmManagerApp(tk.Tk):
                 "status": "🟢 Running"
             }
 
-            # [P0 - Win32 Title Hook]: Luồng đổi tiêu đề cửa sổ trong background
-            tag_label = profile.get("email") or profile.get("name")
-            hook = WindowTitleHook(proc.pid, tag_label, project["name"], instance_info)
+            # [P0 - Win32 Title Hook]: Luồng đổi tiêu đề cửa sổ trong background (ưu tiên real email)
+            real_email, _ = get_profile_real_status(profile_dir)
+            tag_label = real_email or profile.get("email") or profile.get("name")
+            hook = WindowTitleHook(proc.pid, tag_label, project["name"], instance_info, profile_dir=profile_dir)
             hook.start()
             instance_info["hook_thread"] = hook
 
